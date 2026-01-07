@@ -1,6 +1,6 @@
-# Welcome to your Expo app 👋
+# Sportinkaart Mobile App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A mobile application built with [Expo](https://expo.dev) to help users discover sports clubs and facilities.
 
 ## Get started
 
@@ -25,15 +25,19 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
-## Get a fresh project
+## Privacy Policy
 
-When you're ready, run:
+The privacy policy for this app is available in `PRIVACY_POLICY.md` and can be deployed to Vercel using the `privacy-policy` directory.
 
+### Deploy Privacy Policy to Vercel
+
+See the [privacy-policy/README.md](privacy-policy/README.md) for detailed deployment instructions.
+
+Quick deployment:
 ```bash
-npm run reset-project
+cd privacy-policy
+vercel --prod
 ```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
 ## Learn more
 
