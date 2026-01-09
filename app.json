@@ -3,13 +3,22 @@
     "name": "Sportinkaart",
     "slug": "Sportinkaart",
     "version": "1.0.0",
+    "entryPoint": "./index.js",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sportinkaart",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sportinkaart.app",
+      "buildNumber": "1.0",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "This app does not access your photo library.",
+        "NSCameraUsageDescription": "This app does not access your camera.",
+        "NSLocationWhenInUseUsageDescription": "We use your location to show nearby sports clubs and facilities.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -37,6 +46,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "776798a7-d998-4476-bc86-753317151ae4"
+      }
     }
   }
 }
