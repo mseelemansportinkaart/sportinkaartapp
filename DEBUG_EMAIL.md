@@ -50,7 +50,7 @@ After submitting the form, look for these log messages in your terminal:
 **Cause:** Environment variable not loaded
 
 **Solutions:**
-1. Check `.env` file exists and contains: `EXPO_PUBLIC_RESEND_API_KEY=re_DH3nDCvh_BqLN7pFgPNyndsWyCWC46arH`
+1. Check `.env` file exists and contains: `RESEND_API_KEY=re_your_api_key_here`
 2. Restart Expo server completely
 3. Clear cache: `npx expo start -c`
 

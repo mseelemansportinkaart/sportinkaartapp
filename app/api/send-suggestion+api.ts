@@ -1,15 +1,60 @@
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.EXPO_PUBLIC_RESEND_API_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 10;
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function getClientId(request: Request): string {
+  const forwardedFor = request.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    return forwardedFor.split(',')[0]?.trim() || 'unknown';
+  }
+  return (
+    request.headers.get('cf-connecting-ip') ||
+    request.headers.get('x-real-ip') ||
+    'unknown'
+  );
+}
+
+function checkRateLimit(clientId: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(clientId);
+
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(clientId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+
+  if (entry.count >= RATE_LIMIT_MAX) {
+    return false;
+  }
+
+  entry.count += 1;
+  return true;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 export async function POST(request: Request) {
-  console.log('🚀 API Route hit: /api/send-suggestion');
-  console.log('🔑 API Key present:', !!process.env.EXPO_PUBLIC_RESEND_API_KEY);
-  console.log('🔑 API Key value:', process.env.EXPO_PUBLIC_RESEND_API_KEY?.substring(0, 10) + '...');
-
   try {
+    const clientId = getClientId(request);
+    if (!checkRateLimit(clientId)) {
+      return new Response(
+        JSON.stringify({ error: 'Too many requests' }),
+        { status: 429, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
     const body = await request.json();
-    console.log('📦 Request body:', JSON.stringify(body, null, 2));
     const { type, formData } = body;
 
     // Validate request
@@ -38,6 +83,12 @@ export async function POST(request: Request) {
 
       subject = 'Nieuwe locatie toevoegen - Sportinkaart';
 
+      const safeLocationName = escapeHtml(String(locationName));
+      const safeSport = escapeHtml(String(sport));
+      const safeAddress = escapeHtml(String(address));
+      const safeCustomerName = escapeHtml(String(customerName));
+      const safeCustomerEmail = escapeHtml(String(customerEmail));
+
       textContent = `Nieuwe locatie aanvraag:
 
 Locatie Details:
@@ -57,15 +108,15 @@ Verzonden via Sportinkaart App`;
 
         <h3>Locatie Details</h3>
         <ul>
-          <li><strong>Naam locatie:</strong> ${locationName}</li>
-          <li><strong>Sport:</strong> ${sport}</li>
-          <li><strong>Adres:</strong> ${address}</li>
+          <li><strong>Naam locatie:</strong> ${safeLocationName}</li>
+          <li><strong>Sport:</strong> ${safeSport}</li>
+          <li><strong>Adres:</strong> ${safeAddress}</li>
         </ul>
 
         <h3>Contactgegevens</h3>
         <ul>
-          <li><strong>Naam:</strong> ${customerName}</li>
-          <li><strong>E-mail:</strong> ${customerEmail}</li>
+          <li><strong>Naam:</strong> ${safeCustomerName}</li>
+          <li><strong>E-mail:</strong> ${safeCustomerEmail}</li>
         </ul>
 
         <hr>
@@ -83,6 +134,11 @@ Verzonden via Sportinkaart App`;
       }
 
       subject = 'Locatie informatie wijzigen - Sportinkaart';
+
+      const safeExistingLocation = escapeHtml(String(existingLocation));
+      const safeChangeInfo = escapeHtml(String(changeInfo));
+      const safeCustomerName = escapeHtml(String(customerName));
+      const safeCustomerEmail = escapeHtml(String(customerEmail));
 
       textContent = `Wijzigingsverzoek:
 
@@ -102,14 +158,14 @@ Verzonden via Sportinkaart App`;
 
         <h3>Wijzigingsdetails</h3>
         <ul>
-          <li><strong>Welke locatie:</strong> ${existingLocation}</li>
-          <li><strong>Wat moet er aangepast worden:</strong> ${changeInfo}</li>
+          <li><strong>Welke locatie:</strong> ${safeExistingLocation}</li>
+          <li><strong>Wat moet er aangepast worden:</strong> ${safeChangeInfo}</li>
         </ul>
 
         <h3>Contactgegevens</h3>
         <ul>
-          <li><strong>Naam:</strong> ${customerName}</li>
-          <li><strong>E-mail:</strong> ${customerEmail}</li>
+          <li><strong>Naam:</strong> ${safeCustomerName}</li>
+          <li><strong>E-mail:</strong> ${safeCustomerEmail}</li>
         </ul>
 
         <hr>
@@ -123,10 +179,6 @@ Verzonden via Sportinkaart App`;
     }
 
     // Send email using Resend
-    console.log('📧 Attempting to send email via Resend...');
-    console.log('📧 To:', 'info@sportinkaart.nl');
-    console.log('📧 Subject:', subject);
-
     const data = await resend.emails.send({
       from: 'Sportinkaart <noreply@sportinkaart.nl>',
       to: ['info@sportinkaart.nl'],
@@ -136,11 +188,8 @@ Verzonden via Sportinkaart App`;
       reply_to: formData.customerEmail || formData.changeCustomerEmail,
     });
 
-    console.log('📬 Resend response:', JSON.stringify(data, null, 2));
-
     // Check if Resend returned an error
     if (data.error) {
-      console.error('❌ Resend API error:', data.error);
       return new Response(
         JSON.stringify({
           error: 'Email service error',
@@ -150,16 +199,12 @@ Verzonden via Sportinkaart App`;
       );
     }
 
-    console.log('✅ Email sent successfully!');
-
     return new Response(
       JSON.stringify({ success: true, data }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    console.error('❌ Error in API route:', error);
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     return new Response(
       JSON.stringify({
         error: 'Failed to send email',

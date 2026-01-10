@@ -21,9 +21,6 @@ export async function sendAddLocationEmail(formData: AddLocationData) {
     const apiUrl = Constants.expoConfig?.extra?.apiUrl || 'http://localhost:8081';
     const fullUrl = `${apiUrl}/api/send-suggestion`;
 
-    console.log('🌐 Sending request to:', fullUrl);
-    console.log('📦 Request body:', JSON.stringify({ type: 'add', formData }, null, 2));
-
     const response = await fetch(fullUrl, {
       method: 'POST',
       headers: {
@@ -35,11 +32,7 @@ export async function sendAddLocationEmail(formData: AddLocationData) {
       }),
     });
 
-    console.log('📡 Response status:', response.status);
-    console.log('📡 Response headers:', JSON.stringify(Object.fromEntries(response.headers.entries())));
-
     const data = await response.json();
-    console.log('📨 Response data:', JSON.stringify(data, null, 2));
 
     if (!response.ok) {
       throw new Error(data.error || 'Failed to send email');
@@ -47,9 +40,10 @@ export async function sendAddLocationEmail(formData: AddLocationData) {
 
     return { success: true, data };
   } catch (error) {
-    console.error('❌ Error sending add location email:', error);
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      console.error('⚠️  Network error - API route may not be accessible');
+      if (__DEV__) {
+        console.error('⚠️  Network error - API route may not be accessible');
+      }
     }
     throw error;
   }
@@ -79,7 +73,9 @@ export async function sendChangeLocationEmail(formData: ChangeLocationData) {
 
     return { success: true, data };
   } catch (error) {
-    console.error('Error sending change location email:', error);
+    if (__DEV__) {
+      console.error('Error sending change location email:', error);
+    }
     throw error;
   }
 }

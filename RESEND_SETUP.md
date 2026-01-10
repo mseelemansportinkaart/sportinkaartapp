@@ -44,7 +44,7 @@ cp .env.example .env
 2. Open `.env` and add your Resend API key:
 
 ```env
-EXPO_PUBLIC_RESEND_API_KEY=re_your_actual_api_key_here
+RESEND_API_KEY=re_your_actual_api_key_here
 ```
 
 ⚠️ **Important**: Never commit the `.env` file to Git. It's already in `.gitignore`.
@@ -115,7 +115,7 @@ When deploying to production:
 
 1. ✅ Verify your domain in Resend
 2. ✅ Update the `from` email to `noreply@sportinkaart.nl`
-3. ✅ Set the `EXPO_PUBLIC_RESEND_API_KEY` in your hosting environment
+3. ✅ Set the `RESEND_API_KEY` in your hosting environment
 4. ✅ Consider rate limiting to prevent abuse
 5. ✅ Monitor your email quota in the Resend dashboard
 

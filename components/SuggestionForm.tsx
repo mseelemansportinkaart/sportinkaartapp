@@ -111,7 +111,6 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
     setIsSubmitting(true);
 
     try {
-      console.log('📧 Attempting to send email...');
       const result = await sendAddLocationEmail({
         locationName: locationName.trim(),
         sport: sport.trim(),
@@ -119,7 +118,6 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         customerName: customerName.trim(),
         customerEmail: customerEmail.trim(),
       });
-      console.log('✅ Email sent successfully:', result);
 
       Alert.alert(
         t('form.successTitle'),
@@ -127,11 +125,12 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         [{ text: t('form.ok'), onPress: handleClose }]
       );
     } catch (error) {
-      console.error('❌ Error sending email:', error);
-      console.error('Error details:', JSON.stringify(error, null, 2));
+      if (__DEV__) {
+        console.error('❌ Error sending email:', error);
+      }
       Alert.alert(
         t('form.errorTitle'),
-        t('form.emailSendError') + '\n\nDebug: ' + (error instanceof Error ? error.message : 'Unknown error')
+        t('form.emailSendError')
       );
     } finally {
       setIsSubmitting(false);
@@ -166,7 +165,9 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         [{ text: t('form.ok'), onPress: handleClose }]
       );
     } catch (error) {
-      console.error('Error sending email:', error);
+      if (__DEV__) {
+        console.error('Error sending email:', error);
+      }
       Alert.alert(
         t('form.errorTitle'),
         t('form.emailSendError')

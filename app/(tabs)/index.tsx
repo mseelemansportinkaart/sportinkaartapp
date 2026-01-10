@@ -164,6 +164,14 @@ export default function HomeScreen() {
         style={styles.heroBanner}
         resizeMode="cover"
       >
+        {/* Dev button */}
+        <TouchableOpacity
+          style={styles.devButton}
+          onPress={() => router.push('/dev/map-homepage' as any)}
+        >
+          <Text style={styles.devButtonText}>DEV</Text>
+        </TouchableOpacity>
+
         <View style={styles.bannerOverlay}>
           <Text style={styles.bannerSubtitle}>
             {t('home.tagline')}
@@ -264,6 +272,21 @@ const styles = StyleSheet.create({
     height: 280,
     justifyContent: 'flex-end',
     paddingBottom: 30,
+  },
+  devButton: {
+    position: 'absolute',
+    top: 50,
+    right: 15,
+    backgroundColor: 'rgba(255, 0, 0, 0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    zIndex: 10,
+  },
+  devButtonText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
   },
   bannerOverlay: {
     backgroundColor: 'rgba(11, 36, 25, 0.3)',
