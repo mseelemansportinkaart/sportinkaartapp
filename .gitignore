@@ -65,6 +65,7 @@ yarn-error.*
 
 # Tests
 __tests__/
+coverage/
 
 # macOS
 .DS_Store

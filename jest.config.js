@@ -39,6 +39,9 @@ module.exports = {
   coverageReporters: ['text', 'lcov', 'html'],
   reporters: ['default', '<rootDir>/__tests__/reporters/jestFailuresReporter.js'],
   testEnvironment: 'jsdom',
+  // Integration tests mount full screens (Mapbox/Supabase mocks + providers) and
+  // can exceed Jest's 5s default when workers run in parallel under --ci.
+  testTimeout: 15000,
   globals: {
     __DEV__: true,
   },
