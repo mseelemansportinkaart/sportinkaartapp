@@ -10,7 +10,13 @@ module.exports = {
     '/__tests__/setup/',
     '/__tests__/__mocks__/',
     '/__tests__/e2e/',
+    // Git worktrees live under .claude/worktrees/ inside the repo; without this
+    // Jest crawls them and runs every suite twice (and warns about duplicate mocks).
+    '/.claude/worktrees/',
   ],
+  // Keep the worktree copies out of the haste map too, so they don't register as
+  // duplicate modules/manual mocks (e.g. fileMock).
+  modulePathIgnorePatterns: ['/.claude/worktrees/'],
   moduleNameMapper: {
     '\\.(png|jpg|jpeg|gif|webp|svg)$': '<rootDir>/__tests__/__mocks__/fileMock.js',
     '^@/(.*)$': '<rootDir>/$1',
