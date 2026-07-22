@@ -14,6 +14,8 @@ interface Club {
   faciliteiten: string;
   faciliteitenLijst: string[];
   lidWordenMogelijk: boolean;
+  is_featured?: boolean;
+  is_partner?: boolean;
 }
 
 interface FavoritesContextType {

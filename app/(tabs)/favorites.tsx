@@ -1,4 +1,5 @@
 import { useFavorites } from '@/contexts/FavoritesContext';
+import { useLanguage } from '@/contexts/LanguageContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
@@ -8,6 +9,7 @@ const { width } = Dimensions.get('window');
 
 export default function FavoritesScreen() {
   const { favoriteClubs, toggleFavorite, loading } = useFavorites();
+  const { t } = useLanguage();
   const [searchQuery, setSearchQuery] = useState('');
 
   // Helper function to capitalize text (first letter of each word)
@@ -27,18 +29,18 @@ export default function FavoritesScreen() {
 
   const handleRemoveFavorite = async (club: any) => {
     Alert.alert(
-      'Favoriet verwijderen',
-      `Weet je zeker dat je ${club.naam} wilt verwijderen uit je favorieten?`,
+      t('favorites.removeTitle'),
+      t('favorites.removeMessage').replace('{name}', club.naam),
       [
-        { text: 'Annuleren', style: 'cancel' },
+        { text: t('favorites.cancel'), style: 'cancel' },
         {
-          text: 'Verwijderen',
+          text: t('favorites.remove'),
           style: 'destructive',
           onPress: async () => {
             try {
               await toggleFavorite(club);
             } catch (error) {
-              Alert.alert('Fout', 'Er ging iets mis bij het verwijderen van je favoriet');
+              Alert.alert(t('favorites.error'), t('favorites.removeError'));
             }
           }
         }
@@ -59,15 +61,15 @@ export default function FavoritesScreen() {
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backText}>← Terug</Text>
+            <Text style={styles.backText}>← {t('favorites.back')}</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Mijn Favorieten</Text>
+          <Text style={styles.title}>{t('favorites.title')}</Text>
         </View>
         <View style={styles.loadingContainer}>
           <View style={styles.loadingSpinner}>
             <Text style={styles.loadingEmoji}>⏳</Text>
           </View>
-          <Text style={styles.loadingText}>Favorieten laden...</Text>
+          <Text style={styles.loadingText}>{t('favorites.loading')}</Text>
         </View>
       </View>
     );
@@ -78,11 +80,11 @@ export default function FavoritesScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Text style={styles.backText}>← Terug</Text>
+          <Text style={styles.backText}>← {t('favorites.back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Mijn Favorieten</Text>
+        <Text style={styles.title}>{t('favorites.title')}</Text>
         <Text style={styles.subtitle}>
-          {favoriteClubs.length} {favoriteClubs.length === 1 ? 'favoriet' : 'favorieten'}
+          {favoriteClubs.length} {favoriteClubs.length === 1 ? t('favorites.subtitle') : t('favorites.subtitlePlural')}
         </Text>
       </View>
 
@@ -91,11 +93,11 @@ export default function FavoritesScreen() {
           <View style={styles.emptyIconContainer}>
             <Text style={styles.emptyIcon}>💔</Text>
           </View>
-          <Text style={styles.emptyTitle}>Nog geen favorieten</Text>
+          <Text style={styles.emptyTitle}>{t('favorites.noFavorites')}</Text>
           <Text style={styles.emptyText}>
-            Ontdek sportclubs in jouw regio en voeg ze toe aan je favorieten door op het hartje te tikken!
+            {t('favorites.noFavoritesSubtext')}
           </Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.exploreButtonContainer}
             onPress={() => router.back()}
             activeOpacity={0.8}
@@ -104,17 +106,17 @@ export default function FavoritesScreen() {
               colors={['#04e1b2', '#1a3b30']}
               style={styles.exploreButton}
             >
-              <Text style={styles.exploreButtonText}>🔍 Clubs ontdekken</Text>
+              <Text style={styles.exploreButtonText}>🔍 {t('favorites.discoverClubs')}</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
       ) : (
         <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-          {/* Zoekbalk */}
+          {/* Search bar */}
           <View style={styles.searchContainer}>
             <TextInput
               style={styles.searchInput}
-              placeholder="Zoek in je favorieten..."
+              placeholder={t('favorites.searchPlaceholder')}
               placeholderTextColor="#1a3b30"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -126,7 +128,7 @@ export default function FavoritesScreen() {
             )}
           </View>
 
-          {/* Statistieken */}
+          {/* Statistics */}
           <View style={styles.statsContainer}>
             <View style={styles.statsGrid}>
               <View style={styles.statCard}>
@@ -135,7 +137,7 @@ export default function FavoritesScreen() {
                   style={styles.statCardGradient}
                 >
                   <Text style={styles.statNumber}>{favoriteClubs.length}</Text>
-                  <Text style={styles.statLabel}>Favorieten</Text>
+                  <Text style={styles.statLabel}>{t('favorites.statFavorites')}</Text>
                   <Text style={styles.statIcon}>❤️</Text>
                 </LinearGradient>
               </View>
@@ -147,7 +149,7 @@ export default function FavoritesScreen() {
                   <Text style={styles.statNumber}>
                     {new Set(favoriteClubs.map(club => club.sport)).size}
                   </Text>
-                  <Text style={styles.statLabel}>Sporten</Text>
+                  <Text style={styles.statLabel}>{t('favorites.statSports')}</Text>
                   <Text style={styles.statIcon}>⚽</Text>
                 </LinearGradient>
               </View>
@@ -160,14 +162,17 @@ export default function FavoritesScreen() {
               <View style={styles.noResultsContainer}>
                 <Text style={styles.noResultsIcon}>🔍</Text>
                 <Text style={styles.noResultsText}>
-                  Geen favorieten gevonden voor "{searchQuery}"
+                  {t('favorites.noResults')} &quot;{searchQuery}&quot;
                 </Text>
               </View>
             ) : (
               filteredFavorites.map((club) => (
                 <TouchableOpacity
                   key={club.id}
-                  style={styles.favoriteCard}
+                  style={[
+                    styles.favoriteCard,
+                    club.is_featured && styles.featuredCard
+                  ]}
                   onPress={() => handleClubPress(club)}
                   activeOpacity={0.8}
                 >
@@ -183,6 +188,11 @@ export default function FavoritesScreen() {
                           <View style={styles.sportTag}>
                             <Text style={styles.sportText}>{capitalizeText(club.sport)}</Text>
                           </View>
+                          {club.is_partner && (
+                            <View style={styles.partnerTag}>
+                              <Text style={styles.partnerText}>{t('region.partner')}</Text>
+                            </View>
+                          )}
                         </View>
                       </View>
                       <TouchableOpacity
@@ -192,7 +202,7 @@ export default function FavoritesScreen() {
                         <Text style={styles.removeIcon}>♥</Text>
                       </TouchableOpacity>
                     </View>
-                    
+
                     {/* Club details */}
                     <View style={styles.clubDetails}>
                       <View style={styles.detailRow}>
@@ -210,7 +220,7 @@ export default function FavoritesScreen() {
                     {/* Action buttons */}
                     <View style={styles.actionButtons}>
                       {club.lidWordenMogelijk ? (
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           style={styles.lidWordenButtonContainer}
                           onPress={() => handleLidWorden(club)}
                         >
@@ -218,20 +228,20 @@ export default function FavoritesScreen() {
                             colors={['#04e1b2', '#1a3b30']}
                             style={styles.lidWordenButton}
                           >
-                            <Text style={styles.lidWordenText}>Lid worden</Text>
+                            <Text style={styles.lidWordenText}>{t('favorites.becomeMember')}</Text>
                           </LinearGradient>
                         </TouchableOpacity>
                       ) : (
                         <View style={styles.unavailableButtonContainer}>
-                          <Text style={styles.unavailableText}>Niet beschikbaar</Text>
+                          <Text style={styles.unavailableText}>{t('favorites.notAvailable')}</Text>
                         </View>
                       )}
-                      
-                      <TouchableOpacity 
+
+                      <TouchableOpacity
                         style={styles.detailButton}
                         onPress={() => handleClubPress(club)}
                       >
-                        <Text style={styles.detailButtonText}>Meer info</Text>
+                        <Text style={styles.detailButtonText}>{t('favorites.moreInfo')}</Text>
                       </TouchableOpacity>
                     </View>
                   </LinearGradient>
@@ -242,9 +252,6 @@ export default function FavoritesScreen() {
 
           {/* Footer */}
           <View style={styles.footer}>
-            <Text style={styles.footerText}>
-            </Text>
-            
             {/* Contact Button */}
             <TouchableOpacity
               style={styles.contactButtonWrapper}
@@ -257,7 +264,7 @@ export default function FavoritesScreen() {
                 end={{ x: 1, y: 0 }}
                 style={styles.contactGradient}
               >
-                <Text style={styles.contactButtonText}>Suggestie of vraag?</Text>
+                <Text style={styles.contactButtonText}>{t('favorites.contact')}</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -485,6 +492,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
+  featuredCard: {
+    borderWidth: 4,
+    borderColor: '#04e1b2',
+  },
   favoriteCardGradient: {
     padding: 20,
   },
@@ -516,6 +527,17 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   sportText: {
+    color: '#0b2419',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  partnerTag: {
+    backgroundColor: '#04e1b2',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  partnerText: {
     color: '#0b2419',
     fontSize: 12,
     fontWeight: '700',

@@ -1,11 +1,16 @@
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
+import { MapboxClusterMarker } from '@/components/MapboxClusterMarker';
 import { SuggestionForm } from '@/components/SuggestionForm';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { CLUSTERING_CONFIG, DEFAULT_MAP_STYLE } from '@/lib/mapboxConfig';
+import { isMapboxAvailable, Mapbox } from '@/lib/mapboxRuntime';
 import { supabase } from '@/lib/supabase';
+import { getZoomFromDelta } from '@/utils/mapUtils';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ImageBackground, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Supercluster from 'supercluster';
 
 // Type definitions
 interface Region {
@@ -14,8 +19,62 @@ interface Region {
   slug: string;
   is_active: boolean;
   is_concept: boolean;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
   created_at: string;
   updated_at: string;
+}
+
+type MapRegion = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+};
+
+type MapCameraEvent = {
+  properties?: {
+    zoom?: number;
+    bounds?: unknown;
+  };
+};
+
+const DEFAULT_MAP_REGION: MapRegion = {
+  latitude: 52.1326,
+  longitude: 5.2913,
+  latitudeDelta: 5.5,
+  longitudeDelta: 5.5,
+};
+
+const PIN_ACTIVE = require('@/assets/images/pin_groen_60.png');
+const PIN_CONCEPT = require('@/assets/images/pin_grijs_60.png');
+const PIN_BASE_SIZE = 48;
+const PIN_MIN_SIZE = 36;
+const PIN_MAX_SIZE = 110;
+const HOME_CLUSTER_UPDATE_THROTTLE_MS = 100;
+const HOME_FIT_BOUNDS_PADDING: [number, number, number, number] = [130, 40, 220, 40]; // [top, right, bottom, left]
+
+// Logo for branding
+const SPORTINKAART_LOGO = require('@/assets/images/icon.png');
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const normalized = value.trim().replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getPinSize(zoomLevel: number): number {
+  // Approximate marker scaling from Mapbox zoom levels.
+  const scale = Math.max(0.65, Math.min(2.2, (zoomLevel - 4) / 7));
+  return clamp(PIN_BASE_SIZE * scale, PIN_MIN_SIZE, PIN_MAX_SIZE);
 }
 
 export default function HomeScreen() {
@@ -24,6 +83,40 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showSuggestionForm, setShowSuggestionForm] = useState(false);
+  const [regionLocationCounts, setRegionLocationCounts] = useState<Record<string, number>>({});
+  const [currentZoom, setCurrentZoom] = useState<number>(getZoomFromDelta(DEFAULT_MAP_REGION.latitudeDelta));
+  const [clusterData, setClusterData] = useState<any[]>([]);
+  const superclusterRef = useRef<Supercluster | null>(null);
+  const mapRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  const zoomRef = useRef<number>(getZoomFromDelta(DEFAULT_MAP_REGION.latitudeDelta));
+  const hasCenteredOnRegionsRef = useRef(false);
+  const lastClusterUpdateTsRef = useRef(0);
+  const lastClusterSignatureRef = useRef('');
+
+  const regionToBbox = useCallback((region: MapRegion): [number, number, number, number] => {
+    return [
+      region.longitude - region.longitudeDelta / 2,
+      region.latitude - region.latitudeDelta / 2,
+      region.longitude + region.longitudeDelta / 2,
+      region.latitude + region.latitudeDelta / 2,
+    ];
+  }, []);
+
+  const boundsToBbox = useCallback((bounds: unknown): [number, number, number, number] | null => {
+    if (!Array.isArray(bounds) || bounds.length < 2) return null;
+    const a = bounds[0] as unknown;
+    const b = bounds[1] as unknown;
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) return null;
+
+    const lng1 = Number(a[0]);
+    const lat1 = Number(a[1]);
+    const lng2 = Number(b[0]);
+    const lat2 = Number(b[1]);
+
+    if (![lng1, lat1, lng2, lat2].every(Number.isFinite)) return null;
+    return [Math.min(lng1, lng2), Math.min(lat1, lat2), Math.max(lng1, lng2), Math.max(lat1, lat2)];
+  }, []);
 
   // Fetch regions from Supabase (memoized)
   const fetchRegions = useCallback(async () => {
@@ -91,133 +184,414 @@ export default function HomeScreen() {
     fetchRegions();
   }, [fetchRegions]);
 
-  // Memoize region rendering
-  const renderRegion = useCallback((region: Region) => {
-    const isConcept = !region.is_active && region.is_concept;
+  const mapRegions = useMemo(() => (
+    regions
+      .map((region) => {
+        const latitude = toFiniteNumber(region.latitude);
+        const longitude = toFiniteNumber(region.longitude);
+        if (latitude === null || longitude === null) {
+          return null;
+        }
+        return {
+          ...region,
+          latitude,
+          longitude,
+        };
+      })
+      .filter(Boolean) as (Region & { latitude: number; longitude: number })[]
+  ), [regions]);
 
-    return (
-      <TouchableOpacity
-        key={region.id}
-        style={[
-          styles.regionButtonWrapper,
-          isConcept && styles.conceptRegionWrapper
-        ]}
-        onPress={() => handleRegionPress(region)}
-        activeOpacity={isConcept ? 1 : 0.8}
-        disabled={isConcept}
-      >
-        <LinearGradient
-          colors={isConcept ? ['#3a3a3a', '#2a2a2a'] : ['#04e1b2', '#1a3b30']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.regionGradient}
-        >
-          <View style={styles.regionContent}>
-            <View style={styles.regionHeader}>
-              <Text style={[
-                styles.regionName,
-                isConcept && styles.conceptRegionName
-              ]}>
-                {region.region_name}
-              </Text>
-              {isConcept && (
-                <View style={styles.comingSoonBadge}>
-                  <Text style={styles.comingSoonText}>
-                    {t('home.comingSoon')}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <Text style={[
-              styles.regionDescription,
-              isConcept && styles.conceptRegionDescription
-            ]}>
-              {isConcept
-                ? t('home.underConstruction')
-                : `${t('home.discover')} ${region.region_name}`
-              }
-            </Text>
-          </View>
-          <View style={[
-            styles.regionIconContainer,
-            isConcept && styles.conceptRegionIcon
-          ]}>
-            <Text style={styles.regionArrow}>
-              {isConcept ? '🚧' : '→'}
-            </Text>
-          </View>
-        </LinearGradient>
-      </TouchableOpacity>
+  const computedMapRegion = useMemo(() => {
+    if (mapRegions.length === 0) {
+      return DEFAULT_MAP_REGION;
+    }
+
+    const latitudes = mapRegions.map((region) => region.latitude);
+    const longitudes = mapRegions.map((region) => region.longitude);
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLng = Math.min(...longitudes);
+    const maxLng = Math.max(...longitudes);
+
+    const latitude = (minLat + maxLat) / 2;
+    const longitude = (minLng + maxLng) / 2;
+    const latitudeDelta = Math.max(0.2, (maxLat - minLat) * 1.4);
+    const longitudeDelta = Math.max(0.2, (maxLng - minLng) * 1.4);
+
+    return {
+      latitude,
+      longitude,
+      latitudeDelta,
+      longitudeDelta,
+    };
+  }, [mapRegions]);
+
+  const handleCameraChanged = useCallback((state: MapCameraEvent) => {
+    const props = (state?.properties ?? {}) as { zoom?: number; bounds?: unknown };
+    const incomingZoom = Number(props.zoom);
+    const nextZoom = Number.isFinite(incomingZoom) ? incomingZoom : zoomRef.current;
+    const zoomFloor = Math.max(
+      CLUSTERING_CONFIG.MIN_ZOOM,
+      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, Math.floor(nextZoom))
     );
-  }, [handleRegionPress, t]);
 
-  // Memoize the regions list to avoid recalculating
-  const regionsList = useMemo(() =>
-    regions.map(renderRegion),
-    [regions, renderRegion]
+    if (Number.isFinite(incomingZoom)) {
+      zoomRef.current = incomingZoom;
+      setCurrentZoom((prev) => {
+        const diff = Math.abs(prev - incomingZoom);
+        return diff > 0.12 ? incomingZoom : prev;
+      });
+    }
+
+    if (!superclusterRef.current) return;
+
+    const stateBbox = boundsToBbox(props.bounds);
+    const bbox = stateBbox ?? regionToBbox(computedMapRegion);
+    const signature = `${zoomFloor}|${bbox.map((value) => value.toFixed(5)).join(',')}`;
+    const now = Date.now();
+
+    if (signature === lastClusterSignatureRef.current) return;
+    if (now - lastClusterUpdateTsRef.current < HOME_CLUSTER_UPDATE_THROTTLE_MS) return;
+
+    lastClusterSignatureRef.current = signature;
+    lastClusterUpdateTsRef.current = now;
+
+    const clusters = superclusterRef.current.getClusters(bbox, zoomFloor).map((feature: any) => {
+      if (!feature?.properties?.cluster) return feature;
+      const exactPinCount = Number(feature?.properties?.point_count) || 0;
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          exact_pin_count: exactPinCount,
+        },
+      };
+    });
+    setClusterData(clusters);
+  }, [boundsToBbox, computedMapRegion, regionToBbox]);
+
+  const handleMapIdle = useCallback((state: MapCameraEvent) => {
+    const props = (state?.properties ?? {}) as { zoom?: number; bounds?: unknown };
+    const incomingZoom = Number(props.zoom);
+    const nextZoom = Number.isFinite(incomingZoom) ? incomingZoom : zoomRef.current;
+    const zoomFloor = Math.max(
+      CLUSTERING_CONFIG.MIN_ZOOM,
+      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, Math.floor(nextZoom))
+    );
+
+    if (!superclusterRef.current) return;
+    const stateBbox = boundsToBbox(props.bounds);
+    const bbox = stateBbox ?? regionToBbox(computedMapRegion);
+    const signature = `${zoomFloor}|${bbox.map((value) => value.toFixed(5)).join(',')}`;
+
+    lastClusterSignatureRef.current = signature;
+    lastClusterUpdateTsRef.current = Date.now();
+
+    const clusters = superclusterRef.current.getClusters(bbox, zoomFloor).map((feature: any) => {
+      if (!feature?.properties?.cluster) return feature;
+      const exactPinCount = Number(feature?.properties?.point_count) || 0;
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          exact_pin_count: exactPinCount,
+        },
+      };
+    });
+    setClusterData(clusters);
+  }, [boundsToBbox, computedMapRegion, regionToBbox]);
+
+  const pinSize = useMemo(() => getPinSize(currentZoom), [currentZoom]);
+  const defaultZoomLevel = useMemo(
+    () => clamp(getZoomFromDelta(computedMapRegion.latitudeDelta), 3, 15),
+    [computedMapRegion.latitudeDelta]
   );
+
+  useEffect(() => {
+    if (mapRegions.length === 0) {
+      superclusterRef.current = null;
+      setClusterData([]);
+      return;
+    }
+
+    const cluster = new Supercluster({
+      radius: CLUSTERING_CONFIG.RADIUS,
+      maxZoom: CLUSTERING_CONFIG.MAX_ZOOM,
+      minZoom: CLUSTERING_CONFIG.MIN_ZOOM,
+      map: (properties: any) => ({
+        locationCount: Number(properties?.locationCount) || 0,
+      }),
+      reduce: (accumulated: any, properties: any) => {
+        accumulated.locationCount =
+          (Number(accumulated.locationCount) || 0) + (Number(properties?.locationCount) || 0);
+      },
+    });
+
+    const points = mapRegions.map((region) => ({
+      type: 'Feature' as const,
+      properties: {
+        ...region,
+        id: region.id,
+        locationCount: Number(regionLocationCounts[region.id]) || 0,
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: [region.longitude, region.latitude],
+      },
+    }));
+
+    cluster.load(points);
+    superclusterRef.current = cluster;
+
+    const bbox = regionToBbox(computedMapRegion);
+    const clusters = cluster.getClusters(bbox, Math.floor(defaultZoomLevel)).map((feature: any) => {
+      if (!feature?.properties?.cluster) return feature;
+      const exactPinCount = Number(feature?.properties?.point_count) || 0;
+      return {
+        ...feature,
+        properties: {
+          ...feature.properties,
+          exact_pin_count: exactPinCount,
+        },
+      };
+    });
+    setClusterData(clusters);
+    zoomRef.current = defaultZoomLevel;
+    lastClusterSignatureRef.current = '';
+    lastClusterUpdateTsRef.current = 0;
+    hasCenteredOnRegionsRef.current = false;
+  }, [mapRegions, computedMapRegion, defaultZoomLevel, regionToBbox, regionLocationCounts]);
+
+  useEffect(() => {
+    if (hasCenteredOnRegionsRef.current) return;
+    if (!cameraRef.current || mapRegions.length === 0) return;
+
+    const latitudes = mapRegions.map((region) => region.latitude);
+    const longitudes = mapRegions.map((region) => region.longitude);
+    const northEast: [number, number] = [Math.max(...longitudes), Math.max(...latitudes)];
+    const southWest: [number, number] = [Math.min(...longitudes), Math.min(...latitudes)];
+
+    hasCenteredOnRegionsRef.current = true;
+    cameraRef.current.fitBounds(
+      northEast,
+      southWest,
+      HOME_FIT_BOUNDS_PADDING,
+      800
+    );
+  }, [mapRegions]);
+
+  const handleClusterPress = useCallback((clusterId: number, coordinate: [number, number]) => {
+    const clusterIndex = superclusterRef.current;
+    if (!clusterIndex || !cameraRef.current) return;
+
+    const expansionZoom = clusterIndex.getClusterExpansionZoom(clusterId);
+    cameraRef.current.setCamera({
+      centerCoordinate: coordinate,
+      zoomLevel: expansionZoom,
+      animationDuration: 700,
+    });
+  }, []);
+
+  const markerData = useMemo(() => {
+    if (clusterData.length > 0) return clusterData;
+    return mapRegions.map((region) => ({
+      type: 'Feature',
+      properties: {
+        ...region,
+        id: region.id,
+        cluster: false,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [region.longitude, region.latitude],
+      },
+    }));
+  }, [clusterData, mapRegions]);
+
+  const fetchRegionCounts = useCallback(async () => {
+    if (regions.length === 0) {
+      setRegionLocationCounts({});
+      return;
+    }
+
+    try {
+      const activeRegions = regions.filter((region) => region.is_active && !region.is_concept);
+      const entries = await Promise.all(
+        activeRegions.map(async (region) => {
+          const tableName = region.region_name.toLowerCase();
+          const { count, error: countError } = await supabase
+            .from(tableName)
+            .select('id', { count: 'exact', head: true })
+            .eq('is_active', true);
+          if (countError) {
+            throw countError;
+          }
+          return [region.id, count ?? 0] as const;
+        })
+      );
+      setRegionLocationCounts(Object.fromEntries(entries));
+    } catch (err) {
+      console.error('Error fetching location counts:', err);
+      setRegionLocationCounts({});
+    }
+  }, [regions]);
+
+  useEffect(() => {
+    fetchRegionCounts();
+  }, [fetchRegionCounts]);
+
+  const mapbox = Mapbox;
+  const MapboxLib = mapbox as NonNullable<typeof Mapbox>;
 
   return (
     <View style={styles.container}>
-      <ImageBackground
-        source={require('@/assets/images/sportinkaart-banner.png')}
-        style={styles.heroBanner}
-        resizeMode="cover"
-      >
-        {/* Dev button */}
-        <TouchableOpacity
-          style={styles.devButton}
-          onPress={() => router.push('/dev/map-homepage' as any)}
-        >
-          <Text style={styles.devButtonText}>DEV</Text>
-        </TouchableOpacity>
+      <View style={styles.mapPreviewWrapper}>
+        {isMapboxAvailable && mapbox ? (
+          <MapboxLib.MapView
+            style={styles.mapPreview}
+            styleURL={DEFAULT_MAP_STYLE}
+            onCameraChanged={handleCameraChanged}
+            onMapIdle={handleMapIdle}
+            pitchEnabled={false}
+            rotateEnabled={false}
+            scaleBarEnabled={true}
+            compassEnabled={true}
+            ref={mapRef}
+          >
+            <MapboxLib.Camera
+              ref={cameraRef}
+              defaultSettings={{
+                centerCoordinate: [computedMapRegion.longitude, computedMapRegion.latitude],
+                zoomLevel: defaultZoomLevel,
+              }}
+            />
+            {markerData.map((item: any) => {
+              const [longitude, latitude] = item.geometry.coordinates;
+              if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
 
-        <View style={styles.bannerOverlay}>
-          <Text style={styles.bannerSubtitle}>
-            {t('home.tagline')}
-          </Text>
+              const isCluster = Boolean(item?.properties?.cluster);
+              if (isCluster) {
+                const clusterId = item?.properties?.cluster_id ?? item?.id;
+                const pointCount =
+                  item?.properties?.exact_pin_count ??
+                  item?.properties?.point_count ??
+                  0;
+                return (
+                  <MapboxLib.MarkerView
+                    key={`cluster-${clusterId}`}
+                    id={`cluster-${clusterId}`}
+                    coordinate={[longitude, latitude]}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                  >
+                    <TouchableOpacity
+                      style={styles.clusterTouchTarget}
+                      activeOpacity={0.9}
+                      onPress={() => {
+                        if (typeof clusterId === 'number') {
+                          handleClusterPress(clusterId, [longitude, latitude]);
+                        }
+                      }}
+                    >
+                      <MapboxClusterMarker count={pointCount} size="small" />
+                    </TouchableOpacity>
+                  </MapboxLib.MarkerView>
+                );
+              }
+
+              const region = item.properties as Region & { latitude: number; longitude: number };
+              const isConcept = !region.is_active && region.is_concept;
+              return (
+                <MapboxLib.MarkerView
+                  key={region.id}
+                  id={`region-${region.id}`}
+                  coordinate={[longitude, latitude]}
+                  anchor={{ x: 0.5, y: 1 }}
+                >
+                  <TouchableOpacity
+                    style={[styles.pinTouchTarget, { width: pinSize, height: pinSize }]}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      if (!isConcept) {
+                        handleRegionPress(region);
+                      }
+                    }}
+                  >
+                    <View collapsable={false} style={[styles.pinWrapper, { width: pinSize, height: pinSize }]}>
+                      <Image
+                        source={isConcept ? PIN_CONCEPT : PIN_ACTIVE}
+                        style={[styles.pinImage, { width: pinSize, height: pinSize }]}
+                      />
+                      {regionLocationCounts[region.id] !== undefined && (() => {
+                        const count = regionLocationCounts[region.id];
+                        const digitCount = String(count).length;
+                        // Keep badge proportional to pin size and scale text down for longer values.
+                        const badgeSize = clamp(
+                          Math.round(pinSize * (0.52 + Math.max(0, digitCount - 1) * 0.08)),
+                          11,
+                          Math.round(pinSize * 0.88)
+                        );
+                        const fontSize = clamp(
+                          Math.round(
+                            pinSize * (digitCount >= 4 ? 0.24 : digitCount === 3 ? 0.28 : 0.34)
+                          ),
+                          11,
+                          18
+                        );
+                        return (
+                          <View style={[
+                            styles.pinCountBadge,
+                            {
+                              width: badgeSize,
+                              height: badgeSize,
+                              borderRadius: badgeSize / 2,
+                              // Position at top-right, attached to the pin edge
+                              top: -badgeSize / 2,
+                              right: -badgeSize / 2,
+                            }
+                          ]}>
+                            <Text
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.55}
+                              style={[styles.pinCountText, { fontSize }]}
+                            >
+                              {count}
+                            </Text>
+                          </View>
+                        );
+                      })()}
+                    </View>
+                  </TouchableOpacity>
+                </MapboxLib.MarkerView>
+              );
+            })}
+          </MapboxLib.MapView>
+        ) : (
+          <View style={styles.mapUnavailable}>
+            <Text style={styles.mapUnavailableTitle}>Map unavailable in Expo Go</Text>
+            <Text style={styles.mapUnavailableText}>Use a development build to load Mapbox native code.</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Logo */}
+      <Image source={SPORTINKAART_LOGO} style={styles.logo} />
+
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#04e1b2" />
+          <Text style={styles.loadingText}>{t('home.loading')}</Text>
         </View>
-      </ImageBackground>
-
-      <ScrollView
-        style={styles.contentScroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.content}>
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#04e1b2" />
-              <Text style={styles.loadingText}>{t('home.loading')}</Text>
-            </View>
-          )}
-
-          {error && (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>{t('home.error')}</Text>
-              <Text style={styles.errorMessage}>{error}</Text>
-              <TouchableOpacity style={styles.retryButton} onPress={fetchRegions}>
-                <Text style={styles.retryButtonText}>{t('home.retry')}</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {!loading && !error && regionsList}
-
-          {!loading && !error && regions.length === 0 && (
-            <View style={styles.noRegionsContainer}>
-              <Text style={styles.noRegionsText}>{t('home.noRegions')}</Text>
-              <Text style={styles.noRegionsSubtext}>{t('home.noRegionsSubtext')}</Text>
-            </View>
-          )}
+      )}
+      {error && (
+        <View style={styles.errorOverlay}>
+          <Text style={styles.errorText}>{t('home.error')}</Text>
+          <Text style={styles.errorMessage}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchRegions}>
+            <Text style={styles.retryButtonText}>{t('home.retry')}</Text>
+          </TouchableOpacity>
         </View>
-
-        <View style={styles.footerSpacer}>
-          <Text style={styles.footerText}>
-            {t('home.moreRegions')}
-          </Text>
-        </View>
-      </ScrollView>
+      )}
 
       <View style={styles.fixedButtonBar}>
         <TouchableOpacity
@@ -268,55 +642,40 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#050f08',
   },
-  heroBanner: {
-    height: 280,
-    justifyContent: 'flex-end',
-    paddingBottom: 30,
+  mapPreviewWrapper: {
+    flex: 1,
+    overflow: 'hidden',
   },
-  devButton: {
-    position: 'absolute',
-    top: 50,
-    right: 15,
-    backgroundColor: 'rgba(255, 0, 0, 0.7)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    zIndex: 10,
-  },
-  devButtonText: {
-    color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  bannerOverlay: {
-    backgroundColor: 'rgba(11, 36, 25, 0.3)',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    alignItems: 'center',
-  },
-  bannerSubtitle: {
-    fontSize: 18,
-    color: '#ffffff',
-    textAlign: 'center',
-    fontWeight: '500',
-    lineHeight: 24,
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-  contentScroll: {
+  mapPreview: {
     flex: 1,
   },
-  scrollContent: {
-    paddingBottom: 100, // Space for fixed button bar
+  mapUnavailable: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#06120b',
   },
-  content: {
-    paddingHorizontal: 25,
-    paddingTop: 25,
-    paddingBottom: 20,
+  mapUnavailableTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center',
   },
-  loadingContainer: {
-    padding: 40,
+  mapUnavailableText: {
+    marginTop: 8,
+    color: '#c8d6cf',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    right: 20,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: 'rgba(5, 15, 8, 0.85)',
     alignItems: 'center',
   },
   loadingText: {
@@ -324,12 +683,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginTop: 15,
   },
-  errorContainer: {
-    padding: 20,
+  errorOverlay: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    right: 20,
+    padding: 16,
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    backgroundColor: 'rgba(255, 107, 107, 0.15)',
     borderRadius: 12,
-    marginBottom: 20,
   },
   errorText: {
     color: '#ff6b6b',
@@ -355,128 +717,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: 'bold',
   },
-  noRegionsContainer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  noRegionsText: {
-    fontSize: 18,
-    color: '#ffffff',
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  noRegionsSubtext: {
-    fontSize: 14,
-    color: '#ffffff',
-    opacity: 0.7,
-    textAlign: 'center',
-  },
-  regionButtonWrapper: {
-    marginBottom: 18,
-    borderRadius: 20,
-    overflow: 'hidden',
-    shadowColor: '#0b2419',
-    shadowOffset: {
-      width: 0,
-      height: 6,
-    },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  conceptRegionWrapper: {
-    opacity: 0.7,
-    shadowOpacity: 0.1,
-  },
-  regionGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 22,
-    paddingHorizontal: 25,
-  },
-  regionContent: {
-    flex: 1,
-  },
-  regionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 6,
-    flexWrap: 'wrap',
-  },
-  regionName: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 0,
-  },
-  conceptRegionName: {
-    opacity: 0.6,
-  },
-  comingSoonBadge: {
-    backgroundColor: '#ffa500',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  comingSoonText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#ffffff',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  regionDescription: {
-    fontSize: 15,
-    color: '#ffffff',
-    opacity: 0.9,
-    fontWeight: '500',
-  },
-  conceptRegionDescription: {
-    opacity: 0.5,
-    fontStyle: 'italic',
-  },
-  regionIconContainer: {
-    width: 45,
-    height: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 22.5,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  conceptRegionIcon: {
-    backgroundColor: 'rgba(255, 165, 0, 0.3)',
-  },
-  regionArrow: {
-    fontSize: 20,
-    color: '#ffffff',
-    fontWeight: '800',
-  },
-  footerSpacer: {
-    paddingVertical: 30,
-    paddingHorizontal: 25,
-    alignItems: 'center',
-    backgroundColor: '#050f08',
-    marginTop: 5,
-  },
-  footerText: {
-    fontSize: 16,
-    color: '#ffffff',
-    opacity: 0.8,
-    textAlign: 'center',
-    fontWeight: '500',
-  },
   fixedButtonBar: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: 20,
-    paddingHorizontal: 25,
+    gap: 8,
+    paddingHorizontal: 16,
     paddingVertical: 15,
     paddingBottom: 25,
     backgroundColor: '#050f08',
@@ -495,7 +745,7 @@ const styles = StyleSheet.create({
   },
   favoritesGradient: {
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
@@ -524,7 +774,7 @@ const styles = StyleSheet.create({
   },
   contactGradient: {
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
@@ -539,5 +789,44 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#ffffff',
     textAlign: 'center',
+  },
+  pinWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinTouchTarget: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clusterTouchTarget: {
+    width: 64,
+    height: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinImage: {
+    resizeMode: 'contain',
+  },
+  pinCountBadge: {
+    position: 'absolute',
+    backgroundColor: '#04e1b2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.2,
+    borderColor: '#0b2419',
+  },
+  pinCountText: {
+    color: '#0b2419',
+    fontWeight: '700',
+    textAlign: 'center',
+    includeFontPadding: false,
+  },
+  logo: {
+    position: 'absolute',
+    left: 20,
+    bottom: 105,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
   },
 });

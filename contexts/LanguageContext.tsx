@@ -8,8 +8,6 @@ interface LanguageContextType {
   t: (key: string) => string;
 }
 
-const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
-
 // Translation dictionary
 const translations: Record<Language, Record<string, string>> = {
   nl: {
@@ -24,8 +22,30 @@ const translations: Record<Language, Record<string, string>> = {
     'home.moreRegions': 'Meer regio\'s komen binnenkort',
     'home.favorites': 'Favorieten',
     'home.contact': 'Suggestie of vraag?',
+    'home.map': 'Kaart',
+    'home.locationCountLabel': 'locaties',
+    'home.locationCountError': 'Kan locaties niet laden. Probeer het later opnieuw.',
+    'home.locationCountErrorShort': 'Laden mislukt',
     'home.comingSoon': 'Binnenkort',
     'home.underConstruction': 'In ontwikkeling',
+    'location.permissionTitle': 'Locatie gebruiken?',
+    'location.permissionMessage': 'We gebruiken je locatie om sportlocaties in de buurt te kunnen tonen.',
+    'location.permissionAllow': 'Toestaan',
+    'location.permissionDeny': 'Niet nu',
+    'location.permissionDenied': 'Locatie is uitgeschakeld. Je kunt dit altijd aanzetten in de instellingen.',
+    'location.permissionSettingsTitle': 'Locatie inschakelen',
+    'location.permissionSettingsMessage': 'Zet locatie-toestemming aan in de instellingen om de kaart te centreren op jouw locatie.',
+    'location.permissionSettingsOpen': 'Open instellingen',
+    'location.permissionSettingsClose': 'Sluiten',
+
+    // Map screen
+    'map.loading': 'Kaart laden...',
+    'map.loadError': 'Fout bij laden',
+    'map.back': 'Terug',
+    'map.available': 'Beschikbaar',
+    'map.comingSoon': 'Binnenkort',
+    'map.markerAvailable': 'Tik om te bekijken',
+    'map.markerComingSoon': 'Binnenkort beschikbaar',
 
     // Region screen
     'region.back': 'Terug',
@@ -46,10 +66,13 @@ const translations: Record<Language, Record<string, string>> = {
     'region.partner': 'Partner',
     'region.moreInfo': 'Meer info',
     'region.contactQuestion': 'Suggestie of vraag?',
+    'region.costFromMonthly': 'Vanaf €{amount} per maand',
+    'region.costFromYearly': 'Vanaf €{amount} per jaar',
+    'region.costFromLesson': 'Vanaf €{amount} per les',
 
     // Filters
-    'filter.selectSport': 'Selecteer Sport',
-    'filter.selectFacilities': 'Selecteer Faciliteiten',
+    'filter.selectSport': 'Selecteer sport',
+    'filter.selectFacilities': 'Selecteer faciliteiten',
     'filter.allSports': 'Alle sporten',
     'filter.allFacilities': 'Alle faciliteiten',
     'filter.apply': 'Toepassen',
@@ -58,11 +81,39 @@ const translations: Record<Language, Record<string, string>> = {
     'filter.youth': 'Jeugd',
     'filter.adults': 'Volwassenen',
     'filter.selected': 'geselecteerd',
+    'filter.active': 'Actief',
+    'filter.select': 'Selecteer',
+    'filter.resetAll': 'Reset alle filters',
+    'filter.confirm': 'Bevestig',
+    'filter.distance': 'Afstand',
+    'filter.allDistances': 'Alle',
+    'filter.costStructure': 'Kosten',
+    'filter.costRange': 'Kosten (min/max)',
+    'filter.resetCost': 'Reset kosten filters',
 
     // Favorites screen
-    'favorites.title': 'Favorieten',
-    'favorites.noFavorites': 'Geen favorieten',
-    'favorites.noFavoritesSubtext': 'Voeg locaties toe aan je favorieten door op het hartje te klikken',
+    'favorites.title': 'Mijn favorieten',
+    'favorites.subtitle': 'favoriet',
+    'favorites.subtitlePlural': 'favorieten',
+    'favorites.noFavorites': 'Nog geen favorieten',
+    'favorites.noFavoritesSubtext': 'Ontdek sportclubs in jouw regio en voeg ze toe aan je favorieten door op het hartje te tikken!',
+    'favorites.back': 'Terug',
+    'favorites.loading': 'Favorieten laden...',
+    'favorites.removeTitle': 'Favoriet verwijderen',
+    'favorites.removeMessage': 'Weet je zeker dat je {name} wilt verwijderen uit je favorieten?',
+    'favorites.cancel': 'Annuleren',
+    'favorites.remove': 'Verwijderen',
+    'favorites.removeError': 'Er ging iets mis bij het verwijderen van je favoriet',
+    'favorites.error': 'Fout',
+    'favorites.discoverClubs': 'Clubs ontdekken',
+    'favorites.searchPlaceholder': 'Zoek in je favorieten...',
+    'favorites.statFavorites': 'Favorieten',
+    'favorites.statSports': 'Sporten',
+    'favorites.noResults': 'Geen favorieten gevonden voor',
+    'favorites.becomeMember': 'Lid worden',
+    'favorites.notAvailable': 'Niet beschikbaar',
+    'favorites.moreInfo': 'Meer info',
+    'favorites.contact': 'Suggestie of vraag?',
 
     // Footer
     'footer.missingLocation': 'Mist een locatie? Neem contact met ons op!',
@@ -107,6 +158,13 @@ const translations: Record<Language, Record<string, string>> = {
     'form.changeDetails': 'Wijzigingsdetails',
     'form.existingLocation': 'Welke locatie',
     'form.existingLocationPlaceholder': 'Naam van de bestaande locatie',
+    'form.city': 'Stad',
+    'form.selectCity': 'Selecteer een stad',
+    'form.selectFacility': 'Selecteer een locatie',
+    'form.noCities': 'Geen steden beschikbaar',
+    'form.noFacilities': 'Geen locaties beschikbaar',
+    'form.cityLoadError': 'Kan steden niet laden. Probeer het later opnieuw.',
+    'form.facilityLoadError': 'Kan locaties niet laden. Probeer het later opnieuw.',
     'form.changeInfo': 'Wat moet er aangepast worden',
     'form.changeInfoPlaceholder': 'Beschrijf wat er gewijzigd moet worden',
 
@@ -131,18 +189,40 @@ const translations: Record<Language, Record<string, string>> = {
   },
   en: {
     // Home screen
-    'home.tagline': 'Find your perfect sports club in the region',
+    'home.tagline': 'Find your perfect sports location in the region',
     'home.loading': 'Loading regions...',
     'home.error': 'Error loading regions:',
     'home.retry': 'Try again',
     'home.noRegions': 'No regions available',
     'home.noRegionsSubtext': 'Check back soon for new regions',
-    'home.discover': 'Discover sports clubs in',
+    'home.discover': 'Discover sports locations in',
     'home.moreRegions': 'More regions coming soon',
     'home.favorites': 'Favorites',
     'home.contact': 'Suggestion or question?',
-    'home.comingSoon': 'Coming Soon',
-    'home.underConstruction': 'Under Construction',
+    'home.map': 'Map',
+    'home.locationCountLabel': 'locations',
+    'home.locationCountError': 'Unable to load locations. Please try again later.',
+    'home.locationCountErrorShort': 'Load failed',
+    'home.comingSoon': 'Coming soon',
+    'home.underConstruction': 'Under construction',
+    'location.permissionTitle': 'Use your location?',
+    'location.permissionMessage': 'We use your location to show nearby sports locations.',
+    'location.permissionAllow': 'Allow',
+    'location.permissionDeny': 'Not now',
+    'location.permissionDenied': 'Location is disabled. You can enable it in settings.',
+    'location.permissionSettingsTitle': 'Enable location',
+    'location.permissionSettingsMessage': 'Enable location permission in settings to center the map on your location.',
+    'location.permissionSettingsOpen': 'Open settings',
+    'location.permissionSettingsClose': 'Close',
+
+    // Map screen
+    'map.loading': 'Loading map...',
+    'map.loadError': 'Error loading',
+    'map.back': 'Back',
+    'map.available': 'Available',
+    'map.comingSoon': 'Coming soon',
+    'map.markerAvailable': 'Tap to view',
+    'map.markerComingSoon': 'Coming soon',
 
     // Region screen
     'region.back': 'Back',
@@ -163,10 +243,13 @@ const translations: Record<Language, Record<string, string>> = {
     'region.partner': 'Partner',
     'region.moreInfo': 'More info',
     'region.contactQuestion': 'Suggestion or question?',
+    'region.costFromMonthly': 'From €{amount} per month',
+    'region.costFromYearly': 'From €{amount} per year',
+    'region.costFromLesson': 'From €{amount} per lesson',
 
     // Filters
-    'filter.selectSport': 'Select Sport',
-    'filter.selectFacilities': 'Select Facilities',
+    'filter.selectSport': 'Select sport',
+    'filter.selectFacilities': 'Select facilities',
     'filter.allSports': 'All sports',
     'filter.allFacilities': 'All facilities',
     'filter.apply': 'Apply',
@@ -175,11 +258,39 @@ const translations: Record<Language, Record<string, string>> = {
     'filter.youth': 'Youth',
     'filter.adults': 'Adults',
     'filter.selected': 'selected',
+    'filter.active': 'Active',
+    'filter.select': 'Select',
+    'filter.resetAll': 'Reset all filters',
+    'filter.confirm': 'Confirm',
+    'filter.distance': 'Distance',
+    'filter.allDistances': 'All',
+    'filter.costStructure': 'Costs',
+    'filter.costRange': 'Cost (min/max)',
+    'filter.resetCost': 'Reset cost filters',
 
     // Favorites screen
-    'favorites.title': 'Favorites',
-    'favorites.noFavorites': 'No favorites',
-    'favorites.noFavoritesSubtext': 'Add locations to your favorites by clicking the heart icon',
+    'favorites.title': 'My favorites',
+    'favorites.subtitle': 'favorite',
+    'favorites.subtitlePlural': 'favorites',
+    'favorites.noFavorites': 'No favorites yet',
+    'favorites.noFavoritesSubtext': 'Discover sports locations in your area and add them to your favorites by tapping the heart!',
+    'favorites.back': 'Back',
+    'favorites.loading': 'Loading favorites...',
+    'favorites.removeTitle': 'Remove favorite',
+    'favorites.removeMessage': 'Are you sure you want to remove {name} from your favorites?',
+    'favorites.cancel': 'Cancel',
+    'favorites.remove': 'Remove',
+    'favorites.removeError': 'Something went wrong while removing your favorite',
+    'favorites.error': 'Error',
+    'favorites.discoverClubs': 'Discover clubs',
+    'favorites.searchPlaceholder': 'Search your favorites...',
+    'favorites.statFavorites': 'Favorites',
+    'favorites.statSports': 'Sports',
+    'favorites.noResults': 'No favorites found for',
+    'favorites.becomeMember': 'Become a member',
+    'favorites.notAvailable': 'Not available',
+    'favorites.moreInfo': 'More info',
+    'favorites.contact': 'Suggestion or question?',
 
     // Footer
     'footer.missingLocation': 'Missing a location? Contact us!',
@@ -224,6 +335,13 @@ const translations: Record<Language, Record<string, string>> = {
     'form.changeDetails': 'Change details',
     'form.existingLocation': 'Which location',
     'form.existingLocationPlaceholder': 'Name of the existing location',
+    'form.city': 'City',
+    'form.selectCity': 'Select a city',
+    'form.selectFacility': 'Select a facility',
+    'form.noCities': 'No cities available',
+    'form.noFacilities': 'No facilities available',
+    'form.cityLoadError': 'Unable to load cities. Please try again later.',
+    'form.facilityLoadError': 'Unable to load facilities. Please try again later.',
     'form.changeInfo': 'What needs to be changed',
     'form.changeInfoPlaceholder': 'Describe what needs to be changed',
 
@@ -248,6 +366,12 @@ const translations: Record<Language, Record<string, string>> = {
   },
 };
 
+const LanguageContext = createContext<LanguageContextType>({
+  language: 'nl',
+  setLanguage: () => undefined,
+  t: (key: string) => translations.nl[key] || key,
+});
+
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguage] = useState<Language>('nl');
 
@@ -263,9 +387,5 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 }
 
 export function useLanguage() {
-  const context = useContext(LanguageContext);
-  if (context === undefined) {
-    throw new Error('useLanguage must be used within a LanguageProvider');
-  }
-  return context;
+  return useContext(LanguageContext);
 }

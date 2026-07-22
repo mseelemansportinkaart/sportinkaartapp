@@ -1,3 +1,4 @@
+import { useLanguage } from "@/contexts/LanguageContext";
 import { CLUSTERING_CONFIG, DEFAULT_MAP_STYLE } from "@/lib/mapboxConfig";
 import { isMapboxAvailable, Mapbox } from "@/lib/mapboxRuntime";
 import { supabase } from "@/lib/supabase";
@@ -7,10 +8,13 @@ import {
   getClusterExpansionZoom,
 } from "@/utils/clusterUtils";
 import { getZoomFromDelta } from "@/utils/mapUtils";
+import * as Linking from "expo-linking";
 import { router } from "expo-router";
+import * as Location from "expo-location";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   StyleSheet,
   Text,
@@ -18,6 +22,15 @@ import {
   View,
 } from "react-native";
 
+// Type alias for region
+type MapRegion = {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+};
+
+// Type definitions
 interface CityRegion {
   id: string;
   region_name: string;
@@ -28,15 +41,27 @@ interface CityRegion {
   longitude: number | null;
 }
 
+// Custom marker images (smaller sizes to avoid oversized pins on device)
 const PIN_ACTIVE = require("@/assets/images/pin_groen_60.png");
 const PIN_CONCEPT = require("@/assets/images/pin_grijs_60.png");
 const PIN_SIZE = 28;
 
+// Logo for branding
+const SPORTINKAART_LOGO = require("@/assets/images/icon.png");
+
+// Legend colors (matching the pin images)
 const ACTIVE_COLOR = "#04e1b2";
 const CONCEPT_COLOR = "#888888";
 
+// World-wide bounds for Supercluster — covers all valid coordinates
 const WORLD_BOUNDS: [[number, number], [number, number]] = [[-180, -85], [180, 85]];
+
+// Initial zoom level when no data is loaded yet (country-level view of Netherlands)
 const DEFAULT_ZOOM = 7;
+
+type MapHomepageDevScreenProps = {
+  markerItemsOverride?: CityRegion[];
+};
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -59,15 +84,120 @@ function hasValidCoordinates(
   );
 }
 
-export default function MapHomepageDevScreen() {
+export default function MapHomepageDevScreen({
+  markerItemsOverride,
+}: MapHomepageDevScreenProps) {
   const mapbox = Mapbox;
   const MapboxLib = mapbox as NonNullable<typeof Mapbox>;
+  const { t } = useLanguage();
   const [regions, setRegions] = useState<CityRegion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Track integer zoom level only — re-cluster on zoom change, not on pan
   const [zoom, setZoom] = useState<number>(DEFAULT_ZOOM);
+  const invalidCoordsLogRef = useRef<Set<string>>(new Set());
   const cameraRef = useRef<any>(null);
+  const permissionRequestedRef = useRef(false);
+  const [hasLocationPermission, setHasLocationPermission] = useState(false);
 
+  const centerOnUser = useCallback(
+    async (source: "auto" | "button") => {
+      try {
+        const existing = await Location.getForegroundPermissionsAsync();
+        if (existing.status === "granted") {
+          setHasLocationPermission(true);
+          const current = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+
+          cameraRef.current?.setCamera?.({
+            centerCoordinate: [current.coords.longitude, current.coords.latitude],
+            zoomLevel: 12,
+            animationDuration: 800,
+          });
+          return;
+        }
+
+        if (source === "button" && permissionRequestedRef.current && existing.status === "denied") {
+          Alert.alert(
+            t("location.permissionSettingsTitle"),
+            t("location.permissionSettingsMessage"),
+            [
+              {
+                text: t("location.permissionSettingsClose"),
+                style: "cancel",
+              },
+              {
+                text: t("location.permissionSettingsOpen"),
+                onPress: () => Linking.openSettings(),
+              },
+            ]
+          );
+          return;
+        }
+
+        permissionRequestedRef.current = true;
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          return;
+        }
+
+        setHasLocationPermission(true);
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+
+        cameraRef.current?.setCamera?.({
+          centerCoordinate: [current.coords.longitude, current.coords.latitude],
+          zoomLevel: 12,
+          animationDuration: 800,
+        });
+      } catch (err) {
+        console.warn("Failed to request location:", err);
+      }
+    },
+    [t]
+  );
+
+  const validRegions = useMemo(
+    () => regions.filter(hasValidCoordinates),
+    [regions]
+  );
+
+  // Calculate initial map region based on regions with coordinates
+  const calculatedRegion = useMemo((): MapRegion => {
+    if (validRegions.length === 0) {
+      return {
+        latitude: 52.1326,
+        longitude: 5.2913,
+        latitudeDelta: 2,
+        longitudeDelta: 2,
+      };
+    }
+
+    const lats = validRegions.map((r) => r.latitude!);
+    const lngs = validRegions.map((r) => r.longitude!);
+
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
+
+    const latDelta = Math.max((maxLat - minLat) * 1.5, 0.5);
+    const lngDelta = Math.max((maxLng - minLng) * 1.5, 0.5);
+
+    return {
+      latitude: centerLat,
+      longitude: centerLng,
+      latitudeDelta: latDelta,
+      longitudeDelta: lngDelta,
+    };
+  }, [validRegions]);
+
+  // Fetch regions from Supabase
   const fetchRegions = useCallback(async () => {
     try {
       setLoading(true);
@@ -91,19 +221,25 @@ export default function MapHomepageDevScreen() {
       if (activeRegionsResponse.error) throw activeRegionsResponse.error;
       if (conceptRegionsResponse.error) throw conceptRegionsResponse.error;
 
-      const combined = [
+      const combinedRegions = [
         ...(activeRegionsResponse.data || []),
         ...(conceptRegionsResponse.data || []),
-      ].map((r) => ({
-        ...r,
-        latitude: toFiniteNumber(r.latitude),
-        longitude: toFiniteNumber(r.longitude),
+      ];
+
+      const normalizedRegions = combinedRegions.map((region) => ({
+        ...region,
+        latitude: toFiniteNumber(region.latitude),
+        longitude: toFiniteNumber(region.longitude),
       }));
 
-      setRegions(combined);
+      setRegions(normalizedRegions);
     } catch (err) {
       console.error("Error fetching regions:", err);
-      setError(err instanceof Error ? err.message : "Fout bij laden");
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : "Er is een fout opgetreden bij het laden van de steden";
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -113,28 +249,25 @@ export default function MapHomepageDevScreen() {
     fetchRegions();
   }, [fetchRegions]);
 
-  const validRegions = useMemo(
-    () => regions.filter(hasValidCoordinates),
-    [regions]
-  );
+  useEffect(() => {
+    if (permissionRequestedRef.current) return;
+    centerOnUser("auto");
+  }, [centerOnUser]);
 
-  const calculatedRegion = useMemo(() => {
-    if (validRegions.length === 0) {
-      return { latitude: 52.1326, longitude: 5.2913, latitudeDelta: 2, longitudeDelta: 2 };
-    }
-    const lats = validRegions.map((r) => r.latitude!);
-    const lngs = validRegions.map((r) => r.longitude!);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-    const minLng = Math.min(...lngs);
-    const maxLng = Math.max(...lngs);
-    return {
-      latitude: (minLat + maxLat) / 2,
-      longitude: (minLng + maxLng) / 2,
-      latitudeDelta: Math.max((maxLat - minLat) * 1.5, 0.5),
-      longitudeDelta: Math.max((maxLng - minLng) * 1.5, 0.5),
-    };
-  }, [validRegions]);
+  useEffect(() => {
+    const invalidCount = regions.length - validRegions.length;
+    if (invalidCount <= 0) return;
+
+    const invalidRegionIds = regions
+      .filter((region) => !hasValidCoordinates(region))
+      .map((region) => region.slug || region.id)
+      .filter((id) => !invalidCoordsLogRef.current.has(id));
+
+    if (invalidRegionIds.length === 0) return;
+
+    invalidRegionIds.forEach((id) => invalidCoordsLogRef.current.add(id));
+    console.warn("[map] Skipping regions with invalid coordinates", invalidRegionIds);
+  }, [regions, validRegions]);
 
   const handleMarkerPress = useCallback((region: CityRegion) => {
     if (region.is_active && !region.is_concept) {
@@ -142,7 +275,7 @@ export default function MapHomepageDevScreen() {
     }
   }, []);
 
-  // Only re-cluster on integer zoom changes — panning never triggers a re-render
+  // Only re-cluster when the integer zoom level changes — panning never triggers a re-render
   const handleCameraChanged = useCallback((state: any) => {
     const newZoom = state?.properties?.zoom;
     if (typeof newZoom !== "number") return;
@@ -152,7 +285,10 @@ export default function MapHomepageDevScreen() {
 
   // Supercluster index — rebuilt only when region data changes
   const clusterIndex = useMemo(() => {
-    const index = createClusterIndex(CLUSTERING_CONFIG.RADIUS, CLUSTERING_CONFIG.MAX_ZOOM);
+    const index = createClusterIndex(
+      CLUSTERING_CONFIG.RADIUS,
+      CLUSTERING_CONFIG.MAX_ZOOM
+    );
     const points = validRegions.map((r) => ({
       type: "Feature" as const,
       properties: { ...r, id: r.id },
@@ -165,12 +301,13 @@ export default function MapHomepageDevScreen() {
     return index;
   }, [validRegions]);
 
-  // Clusters — only recomputed when zoom changes, not on pan
+  // Current clusters — only recomputed when zoom changes (not on pan)
   const clusters = useMemo(
     () => getClusters(clusterIndex, WORLD_BOUNDS, zoom),
     [clusterIndex, zoom]
   );
 
+  // Zoom into a cluster on tap to expand it
   const handleClusterPress = useCallback(
     (clusterId: number, longitude: number, latitude: number) => {
       const expansionZoom = getClusterExpansionZoom(clusterIndex, clusterId);
@@ -186,6 +323,35 @@ export default function MapHomepageDevScreen() {
   const markerElements = useMemo(() => {
     if (!mapbox) return [];
 
+    // Override path: skip clustering, render markers directly
+    if (markerItemsOverride) {
+      return markerItemsOverride
+        .filter(hasValidCoordinates)
+        .map((region) => {
+          const isConcept = region.is_concept && !region.is_active;
+          const pinSource = isConcept ? PIN_CONCEPT : PIN_ACTIVE;
+          return (
+            <MapboxLib.MarkerView
+              key={`region-${region.id}`}
+              id={`region-${region.id}`}
+              coordinate={[region.longitude, region.latitude]}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <TouchableOpacity
+                style={styles.markerTouchTarget}
+                activeOpacity={0.9}
+                onPress={() => handleMarkerPress(region)}
+              >
+                <View collapsable={false}>
+                  <Image source={pinSource} style={styles.pinImage} />
+                </View>
+              </TouchableOpacity>
+            </MapboxLib.MarkerView>
+          );
+        });
+    }
+
+    // Clustered path: render clusters and individual pins from Supercluster
     return clusters
       .map((item) => {
         if (item.isCluster) {
@@ -210,8 +376,10 @@ export default function MapHomepageDevScreen() {
           );
         }
 
+        // Individual pin — region data was stored in properties by markersToPoints
         const props = item.properties as CityRegion;
         if (!props || !hasValidCoordinates(props)) return null;
+
         const isConcept = props.is_concept && !props.is_active;
         const pinSource = isConcept ? PIN_CONCEPT : PIN_ACTIVE;
 
@@ -235,13 +403,24 @@ export default function MapHomepageDevScreen() {
         );
       })
       .filter(Boolean) as React.ReactElement[];
-  }, [clusters, mapbox, handleMarkerPress, handleClusterPress]);
+  }, [clusters, mapbox, markerItemsOverride, handleMarkerPress, handleClusterPress]);
+
+  const backButton = (
+    <TouchableOpacity
+      style={styles.backButton}
+      onPress={() => router.back()}
+      activeOpacity={0.8}
+    >
+      <Text style={styles.backText}>← {t("map.back")}</Text>
+    </TouchableOpacity>
+  );
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
+        {backButton}
         <ActivityIndicator size="large" color="#04e1b2" />
-        <Text style={styles.loadingText}>Kaart laden...</Text>
+        <Text style={styles.loadingText}>{t("map.loading")}</Text>
       </View>
     );
   }
@@ -249,7 +428,8 @@ export default function MapHomepageDevScreen() {
   if (error) {
     return (
       <View style={styles.errorContainer}>
-        <Text style={styles.errorText}>Fout bij laden</Text>
+        {backButton}
+        <Text style={styles.errorText}>{t("map.loadError")}</Text>
         <Text style={styles.errorMessage}>{error}</Text>
       </View>
     );
@@ -258,6 +438,7 @@ export default function MapHomepageDevScreen() {
   if (!isMapboxAvailable || !mapbox) {
     return (
       <View style={styles.errorContainer}>
+        {backButton}
         <Text style={styles.errorText}>Map unavailable in Expo Go</Text>
         <Text style={styles.errorMessage}>
           Use a development build to load Mapbox native code.
@@ -270,8 +451,9 @@ export default function MapHomepageDevScreen() {
 
   return (
     <View style={styles.container}>
+      {backButton}
       <MapboxLib.MapView
-        testID="map-dev-screen"
+        testID="map-homepage-map"
         style={styles.map}
         styleURL={DEFAULT_MAP_STYLE}
         pitchEnabled={false}
@@ -287,18 +469,30 @@ export default function MapHomepageDevScreen() {
             zoomLevel: initialZoomLevel,
           }}
         />
+        {hasLocationPermission && <MapboxLib.UserLocation visible={true} />}
         {markerElements}
       </MapboxLib.MapView>
+
+      <TouchableOpacity
+        style={styles.centerButton}
+        onPress={() => centerOnUser("button")}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.centerButtonText}>⌖</Text>
+      </TouchableOpacity>
+
+      {/* Logo */}
+      <Image source={SPORTINKAART_LOGO} style={styles.logo} />
 
       {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: ACTIVE_COLOR }]} />
-          <Text style={styles.legendText}>Beschikbaar</Text>
+          <Text style={styles.legendText}>{t("map.available")}</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: CONCEPT_COLOR }]} />
-          <Text style={styles.legendText}>Binnenkort</Text>
+          <Text style={styles.legendText}>{t("map.comingSoon")}</Text>
         </View>
       </View>
     </View>
@@ -345,6 +539,31 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#050f08",
+  },
+  backButton: {
+    position: "absolute",
+    top: 60,
+    left: 20,
+    zIndex: 10,
+    backgroundColor: "#1a3b30",
+    borderWidth: 2,
+    borderColor: "#04e1b2",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  backText: {
+    fontSize: 16,
+    color: "#04e1b2",
+    fontWeight: "600",
   },
   loadingText: {
     color: "#ffffff",
@@ -395,5 +614,39 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 12,
     fontWeight: "500",
+  },
+  centerButton: {
+    position: "absolute",
+    right: 20,
+    bottom: 40,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#1a3b30",
+    borderWidth: 2,
+    borderColor: "#04e1b2",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  centerButtonText: {
+    color: "#ffffff",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  logo: {
+    position: "absolute",
+    left: 20,
+    bottom: 55,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
   },
 });

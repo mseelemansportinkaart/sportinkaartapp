@@ -1,6 +1,6 @@
 # Sportinkaart Mobile App
 
-A mobile application built with [Expo](https://expo.dev) to help users discover sports clubs and facilities.
+A mobile application built with [Expo](https://expo.dev) to help users discover sports locations and facilities.
 
 ## Get started
 
@@ -24,20 +24,6 @@ In the output, you'll find options to open the app in a
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Privacy Policy
-
-The privacy policy for this app is available in `PRIVACY_POLICY.md` and can be deployed to Vercel using the `privacy-policy` directory.
-
-### Deploy Privacy Policy to Vercel
-
-See the [privacy-policy/README.md](privacy-policy/README.md) for detailed deployment instructions.
-
-Quick deployment:
-```bash
-cd privacy-policy
-vercel --prod
-```
 
 ## Learn more
 

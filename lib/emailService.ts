@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
 
 interface AddLocationData {
+  city: string;
   locationName: string;
   sport: string;
   address: string;

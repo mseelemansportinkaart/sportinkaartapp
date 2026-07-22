@@ -25,6 +25,7 @@ yarn-error.log*
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Native builds (indien ooit gegenereerd)
 ios/
@@ -61,6 +62,9 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+
+# Tests
+__tests__/
 
 # macOS
 .DS_Store

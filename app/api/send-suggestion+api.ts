@@ -72,9 +72,9 @@ export async function POST(request: Request) {
 
     if (type === 'add') {
       // Add Location Email
-      const { locationName, sport, address, customerName, customerEmail } = formData;
+      const { city, locationName, sport, address, customerName, customerEmail } = formData;
 
-      if (!locationName || !sport || !address || !customerName || !customerEmail) {
+      if (!city || !locationName || !sport || !address || !customerName || !customerEmail) {
         return new Response(
           JSON.stringify({ error: 'Missing required form fields' }),
           { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -83,6 +83,7 @@ export async function POST(request: Request) {
 
       subject = 'Nieuwe locatie toevoegen - Sportinkaart';
 
+      const safeCity = escapeHtml(String(city));
       const safeLocationName = escapeHtml(String(locationName));
       const safeSport = escapeHtml(String(sport));
       const safeAddress = escapeHtml(String(address));
@@ -92,6 +93,7 @@ export async function POST(request: Request) {
       textContent = `Nieuwe locatie aanvraag:
 
 Locatie Details:
+- Stad: ${city}
 - Naam locatie: ${locationName}
 - Sport: ${sport}
 - Adres: ${address}
@@ -108,6 +110,7 @@ Verzonden via Sportinkaart App`;
 
         <h3>Locatie Details</h3>
         <ul>
+          <li><strong>Stad:</strong> ${safeCity}</li>
           <li><strong>Naam locatie:</strong> ${safeLocationName}</li>
           <li><strong>Sport:</strong> ${safeSport}</li>
           <li><strong>Adres:</strong> ${safeAddress}</li>
@@ -185,7 +188,7 @@ Verzonden via Sportinkaart App`;
       subject: subject,
       text: textContent,
       html: htmlContent,
-      reply_to: formData.customerEmail || formData.changeCustomerEmail,
+      replyTo: formData.customerEmail || formData.changeCustomerEmail,
     });
 
     // Check if Resend returned an error

@@ -3,12 +3,10 @@
     "name": "Sportinkaart",
     "slug": "Sportinkaart",
     "version": "1.0.0",
-    "entryPoint": "./index.js",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "sportinkaart",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sportinkaart.app",
@@ -16,7 +14,7 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "This app does not access your photo library.",
         "NSCameraUsageDescription": "This app does not access your camera.",
-        "NSLocationWhenInUseUsageDescription": "We use your location to show nearby sports clubs and facilities.",
+        "NSLocationWhenInUseUsageDescription": "We gebruiken je locatie om sportlocaties in de buurt te kunnen tonen.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -25,7 +23,12 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "edgeToEdgeEnabled": true,
+      "package": "com.sportinkaart.app"
     },
     "web": {
       "bundler": "metro",
@@ -37,10 +40,16 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "image": "./assets/images/splash-icon-sportinkaart.png",
+          "resizeMode": "cover",
+          "backgroundColor": "#1a1a1a"
+        }
+      ],
+      "expo-font",
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxMapsImpl": "mapbox"
         }
       ]
     ],

@@ -1,14 +1,17 @@
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { SuggestionForm } from '@/components/SuggestionForm';
 import { useFavorites } from '@/contexts/FavoritesContext';
+import { useFilters } from '@/contexts/FiltersContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDebounce } from '@/hooks/useDebounce';
 import { supabase } from '@/lib/supabase';
+import { getSportEmoji } from '@/utils/sportEmoji';
 import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
+import * as Location from 'expo-location';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 // Type definitions
@@ -32,6 +35,8 @@ interface Location {
   website: string;
   email: string;
   kosten: string;
+  cost_range?: string | null;
+  cost_structure?: string | null;
   faciliteiten: string;
   faciliteitenLijst: string[];
   lidWordenMogelijk: boolean;
@@ -40,6 +45,8 @@ interface Location {
   main_image_url?: string;
   images: any[];
   phone?: string;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 interface Facility {
@@ -47,6 +54,8 @@ interface Facility {
   name: string;
   category: string;
 }
+
+// Custom marker images (smaller sizes to avoid oversized pins on device)
 
 // Helper function to convert UUID to numeric ID for favorites - OUTSIDE component for stable reference
 const getNumericId = (uuidString: string | undefined | null): number => {
@@ -66,14 +75,115 @@ const getNumericId = (uuidString: string | undefined | null): number => {
   return Math.abs(hash);
 };
 
+const toFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const normalized = value.trim().replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+const normalizeCostStructure = (value?: string | null): 'monthly' | 'yearly' | 'lesson' | null => {
+  if (!value) return null;
+  const normalized = value.toLowerCase();
+  if (
+    normalized === 'monthly' ||
+    normalized === 'per_month' ||
+    normalized === 'maandelijks' ||
+    normalized.includes('per month') ||
+    normalized.includes('per maand')
+  ) {
+    return 'monthly';
+  }
+  if (
+    normalized === 'yearly' ||
+    normalized === 'per_year' ||
+    normalized === 'jaarlijks' ||
+    normalized.includes('per year') ||
+    normalized.includes('per jaar')
+  ) {
+    return 'yearly';
+  }
+  if (
+    normalized === 'per_lesson' ||
+    normalized === 'per_les' ||
+    normalized === 'lesson' ||
+    normalized.includes('per lesson') ||
+    normalized.includes('per les')
+  ) {
+    return 'lesson';
+  }
+  return null;
+};
+
+const labelFromCostTemplate = (template: string): string => {
+  return template.replace('Vanaf €{amount} ', '').replace('From €{amount} ', '').trim();
+};
+
+const hasValidCoordinates = (
+  location: Location
+): location is Location & { latitude: number; longitude: number } => {
+  return (
+    typeof location.latitude === 'number' &&
+    Number.isFinite(location.latitude) &&
+    typeof location.longitude === 'number' &&
+    Number.isFinite(location.longitude)
+  );
+};
+
+const getDistanceKm = (
+  origin: { latitude: number; longitude: number },
+  destination: { latitude: number; longitude: number }
+): number => {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(destination.latitude - origin.latitude);
+  const dLng = toRad(destination.longitude - origin.longitude);
+  const lat1 = toRad(origin.latitude);
+  const lat2 = toRad(destination.latitude);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
+};
+
+
 export default function LocationScreen() {
   const { t, language } = useLanguage();
   const params = useLocalSearchParams();
   const regionSlug = params.slug as string; // Get slug from route parameter
   const { toggleFavorite, favorites } = useFavorites();
+  const {
+    setRegionSlug,
+    searchQuery,
+    setSearchQuery,
+    selectedSports,
+    setSelectedSports,
+    selectedFaciliteiten,
+    setSelectedFaciliteiten,
+    kostenFilterActive,
+    setKostenFilterActive,
+    minKosten,
+    setMinKosten,
+    maxKosten,
+    setMaxKosten,
+    selectedCostStructure,
+    setSelectedCostStructure,
+    resetFilters: resetSharedFilters,
+  } = useFilters();
   
   console.log('LocationScreen loaded with params:', params);
   console.log('Extracted regionSlug:', regionSlug);
+
+  useEffect(() => {
+    if (regionSlug) {
+      setRegionSlug(regionSlug);
+    }
+  }, [regionSlug, setRegionSlug]);
   
   // State for data from Supabase
   const [region, setRegion] = useState<Region | null>(null);
@@ -90,14 +200,11 @@ export default function LocationScreen() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Filter states
-  const [searchQuery, setSearchQuery] = useState('');
   const debouncedSearchQuery = useDebounce(searchQuery, 300); // Debounce search input
-  const [selectedSports, setSelectedSports] = useState<string[]>([]);
-  const [kostenFilterActive, setKostenFilterActive] = useState(false);
-  const [minKosten, setMinKosten] = useState('');
-  const [maxKosten, setMaxKosten] = useState('');
-  const [selectedFaciliteiten, setSelectedFaciliteiten] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [distanceFilterKm, setDistanceFilterKm] = useState<number | null>(null);
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const permissionRequestedRef = useRef(false);
 
   // Modal states
   const [activeFilterModal, setActiveFilterModal] = useState<'sport' | 'faciliteiten' | 'kosten' | null>(null);
@@ -105,6 +212,7 @@ export default function LocationScreen() {
   const [tempSelectedFaciliteiten, setTempSelectedFaciliteiten] = useState<string[]>([]);
   const [tempMinKosten, setTempMinKosten] = useState('');
   const [tempMaxKosten, setTempMaxKosten] = useState('');
+  const [tempCostStructure, setTempCostStructure] = useState<'monthly' | 'yearly' | 'lesson' | null>(null);
   const [showSuggestionForm, setShowSuggestionForm] = useState(false);
 
   // Helper function to capitalize text (first letter of each word)
@@ -147,6 +255,19 @@ export default function LocationScreen() {
     );
   }, [rawLocationsData, language]);
 
+  const activeFilterCount =
+    selectedSports.length +
+    selectedFaciliteiten.length +
+    (kostenFilterActive ? 1 : 0) +
+    (distanceFilterKm ? 1 : 0);
+
+  const distanceOptions = [2, 5, 10, 25];
+  const costStructureOptions: { key: 'monthly' | 'yearly' | 'lesson'; label: string }[] = [
+    { key: 'monthly', label: labelFromCostTemplate(t('region.costFromMonthly')) },
+    { key: 'yearly', label: labelFromCostTemplate(t('region.costFromYearly')) },
+    { key: 'lesson', label: labelFromCostTemplate(t('region.costFromLesson')) },
+  ];
+
   // Memoize filtered locations with debounced search
   const filteredLocations = useMemo(() => {
     let filtered = allLocations;
@@ -171,14 +292,31 @@ export default function LocationScreen() {
 
     if (kostenFilterActive && (minKosten !== '' || maxKosten !== '')) {
       filtered = filtered.filter((location: Location) => {
-        // Extract numbers from cost string, handle cases where no numbers exist
-        const kostenMatch = location.kosten.match(/\d+/g);
-        if (!kostenMatch) return true; // If no numbers in cost, include in results
+        const costRange = location.cost_range ?? '';
+        const kostenMatch = costRange.match(/\d+/g);
+        const numbers = (kostenMatch || [])
+          .map((value) => parseInt(value, 10))
+          .filter((value) => !Number.isNaN(value));
 
-        const kostenNummer = parseInt(kostenMatch[0]);
-        const min = minKosten ? parseInt(minKosten) : 0;
-        const max = maxKosten ? parseInt(maxKosten) : 99999;
-        return kostenNummer >= min && kostenNummer <= max;
+        const structure = normalizeCostStructure(location.cost_structure);
+        if (!structure && numbers.length === 0) return true;
+
+        if (structure && selectedCostStructure && structure !== selectedCostStructure) {
+          return false;
+        }
+
+        if (numbers.length === 0) return true;
+
+        const minValue = Math.min(...numbers);
+        const maxValue = Math.max(...numbers);
+        const minTrimmed = minKosten.trim();
+        const maxTrimmed = maxKosten.trim();
+        const min = minTrimmed ? parseInt(minTrimmed, 10) : 0;
+        const max = maxTrimmed ? parseInt(maxTrimmed, 10) : 99999;
+
+        if (minTrimmed !== '' && minValue < min) return false;
+        if (maxTrimmed !== '' && maxValue > max) return false;
+        return true;
       });
     }
 
@@ -199,6 +337,17 @@ export default function LocationScreen() {
       });
     }
 
+    if (distanceFilterKm && userLocation) {
+      filtered = filtered.filter((location: Location) => {
+        if (!hasValidCoordinates(location)) return false;
+        const distance = getDistanceKm(userLocation, {
+          latitude: location.latitude,
+          longitude: location.longitude,
+        });
+        return distance <= distanceFilterKm;
+      });
+    }
+
     // Sort filtered results: Featured first (alphabetically), then Partner (alphabetically), then others (alphabetically)
     return filtered.sort((a, b) => {
       // First, sort by featured status
@@ -214,7 +363,19 @@ export default function LocationScreen() {
       // If both have same featured and partner status, sort alphabetically by name
       return a.naam.localeCompare(b.naam, 'nl', { sensitivity: 'base' });
     });
-  }, [allLocations, debouncedSearchQuery, selectedSports, kostenFilterActive, minKosten, maxKosten, selectedFaciliteiten]);
+  }, [
+    allLocations,
+    debouncedSearchQuery,
+    selectedSports,
+    kostenFilterActive,
+    minKosten,
+    maxKosten,
+    selectedCostStructure,
+    selectedFaciliteiten,
+    distanceFilterKm,
+    userLocation,
+  ]);
+
 
   // Helper function to convert Location to Club format
   const locationToClub = (location: Location) => ({
@@ -229,7 +390,9 @@ export default function LocationScreen() {
     kosten: location.kosten,
     faciliteiten: location.faciliteiten,
     faciliteitenLijst: location.faciliteitenLijst,
-    lidWordenMogelijk: location.lidWordenMogelijk
+    lidWordenMogelijk: location.lidWordenMogelijk,
+    is_featured: location.is_featured,
+    is_partner: location.is_partner
   });
 
   // Fetch data from Supabase
@@ -243,6 +406,80 @@ export default function LocationScreen() {
       setLoading(false);
     }
   }, [regionSlug, language]);
+
+  // Helper function to format cost with structure
+  // Returns empty string for Unknown/null to hide the cost row
+const formatCostWithStructure = (costRange: string | null, costStructure: string | null): string => {
+    // Hide costs for Unknown or null cost_structure
+    if (!costStructure || costStructure.toLowerCase() === 'unknown') {
+      return '';
+    }
+
+    if (!costRange || costRange.toLowerCase() === 'unknown') {
+      return '';
+    }
+
+    // Extract numeric value from cost_range
+    const amount = costRange.replace(/[^0-9.,]/g, '').trim();
+    if (!amount) {
+      return '';
+    }
+
+    // Format based on cost_structure
+    const structure = costStructure.toLowerCase();
+
+    // Handle "From xxx to yyy" range format - extract both numbers
+    if (structure.includes(' to ') || structure.includes(' tot ')) {
+      const numbers = costRange.match(/\d+/g);
+      if (numbers && numbers.length >= 2) {
+        return language === 'nl'
+          ? `Vanaf €${numbers[0]} tot €${numbers[1]} per maand`
+          : `From €${numbers[0]} to €${numbers[1]} per month`;
+      }
+      return language === 'nl'
+        ? `Vanaf €${amount} per maand`
+        : `From €${amount} per month`;
+    }
+
+    if (structure === 'monthly' || structure === 'per_month' || structure === 'maandelijks' || structure.includes('per month') || structure.includes('per maand')) {
+      return language === 'nl'
+        ? `Vanaf €${amount} per maand`
+        : `From €${amount} per month`;
+    } else if (structure === 'yearly' || structure === 'per_year' || structure === 'jaarlijks' || structure.includes('per year') || structure.includes('per jaar')) {
+      return language === 'nl'
+        ? `Vanaf €${amount} per jaar`
+        : `From €${amount} per year`;
+    } else if (structure === 'per_lesson' || structure === 'per_les' || structure === 'lesson' || structure.includes('per lesson') || structure.includes('per les')) {
+      return language === 'nl'
+        ? `Vanaf €${amount} per les`
+        : `From €${amount} per lesson`;
+    }
+
+    // Default: just show the amount with euro sign
+  return `€${amount}`;
+};
+
+const splitCostLabel = (label: string): { prefix: string; timeframe: string } | null => {
+  const tokens = [
+    ' per maand',
+    ' per jaar',
+    ' per les',
+    ' per month',
+    ' per year',
+    ' per lesson',
+  ];
+
+  for (const token of tokens) {
+    const index = label.indexOf(token);
+    if (index !== -1) {
+      const prefix = label.slice(0, index).trimEnd();
+      const timeframe = label.slice(index).trim();
+      return { prefix, timeframe };
+    }
+  }
+
+  return null;
+};
 
   // Helper function to transform raw location data to Location type
   const transformLocationData = (location: any, regionName: string): Location => {
@@ -273,9 +510,9 @@ export default function LocationScreen() {
       adres: location.address || '',
       website: location.website || '',
       email: location.email || '',
-      kosten: (location.cost_range && location.cost_range.toLowerCase() !== 'unknown')
-        ? `€${location.cost_range}`
-        : (language === 'nl' ? 'Prijs op aanvraag' : 'Price on request'),
+      kosten: formatCostWithStructure(location.cost_range, location.cost_structure),
+      cost_range: location.cost_range ?? null,
+      cost_structure: location.cost_structure ?? null,
       faciliteiten: description,
       faciliteitenLijst: facilitiesData,
       lidWordenMogelijk: location.membership_available !== false,
@@ -283,7 +520,9 @@ export default function LocationScreen() {
       is_partner: location.is_partner || false,
       main_image_url: location.main_image_url,
       images: [],
-      phone: location.phone
+      phone: location.phone,
+      latitude: toFiniteNumber(location.latitude),
+      longitude: toFiniteNumber(location.longitude)
     };
   };
 
@@ -330,8 +569,8 @@ export default function LocationScreen() {
         .select(`
           id, name, sport_nl, sport_en, description_nl, description_en,
           facilities_nl, facilities_en, address, website, email,
-          cost_range, membership_available, is_featured, is_partner,
-          main_image_url, phone, is_active
+          cost_range, cost_structure, membership_available, is_featured, is_partner,
+          main_image_url, phone, is_active, latitude, longitude
         `)
         .eq('is_active', true)
         .order('is_featured', { ascending: false })
@@ -362,8 +601,8 @@ export default function LocationScreen() {
         .select(`
           id, name, sport_nl, sport_en, description_nl, description_en,
           facilities_nl, facilities_en, address, website, email,
-          cost_range, membership_available, is_featured, is_partner,
-          main_image_url, phone, is_active
+          cost_range, cost_structure, membership_available, is_featured, is_partner,
+          main_image_url, phone, is_active, latitude, longitude
         `)
         .eq('is_active', true)
         .order('is_featured', { ascending: false })
@@ -433,9 +672,10 @@ export default function LocationScreen() {
     } else if (filterType === 'kosten') {
       setTempMinKosten(minKosten);
       setTempMaxKosten(maxKosten);
+      setTempCostStructure(selectedCostStructure);
     }
     setActiveFilterModal(filterType);
-  }, [selectedSports, selectedFaciliteiten, minKosten, maxKosten]);
+  }, [selectedSports, selectedFaciliteiten, minKosten, maxKosten, selectedCostStructure]);
 
   const closeFilterModal = useCallback(() => {
     setActiveFilterModal(null);
@@ -447,21 +687,88 @@ export default function LocationScreen() {
     } else if (activeFilterModal === 'faciliteiten') {
       setSelectedFaciliteiten([...tempSelectedFaciliteiten]);
     } else if (activeFilterModal === 'kosten') {
-      setMinKosten(tempMinKosten);
-      setMaxKosten(tempMaxKosten);
-      setKostenFilterActive(tempMinKosten !== '' || tempMaxKosten !== '');
+      const trimmedMin = tempMinKosten.trim();
+      const trimmedMax = tempMaxKosten.trim();
+      setMinKosten(trimmedMin);
+      setMaxKosten(trimmedMax);
+      setSelectedCostStructure(tempCostStructure);
+      setKostenFilterActive(
+        tempCostStructure !== null && (trimmedMin !== '' || trimmedMax !== '')
+      );
     }
     setActiveFilterModal(null);
-  }, [activeFilterModal, tempSelectedSports, tempSelectedFaciliteiten, tempMinKosten, tempMaxKosten]);
+  }, [
+    activeFilterModal,
+    tempSelectedSports,
+    tempSelectedFaciliteiten,
+    tempMinKosten,
+    tempMaxKosten,
+    tempCostStructure,
+  ]);
 
-  const resetFilters = useCallback(() => {
-    setSearchQuery('');
-    setSelectedSports([]);
-    setKostenFilterActive(false);
-    setMinKosten('');
-    setMaxKosten('');
-    setSelectedFaciliteiten([]);
-  }, []);
+  const resetAllFilters = useCallback(() => {
+    resetSharedFilters();
+    setDistanceFilterKm(null);
+  }, [resetSharedFilters]);
+
+  const handleDistanceSelect = useCallback(async (km: number | null) => {
+    if (km === null) {
+      setDistanceFilterKm(null);
+      return;
+    }
+
+    try {
+      const existing = await Location.getForegroundPermissionsAsync();
+      if (existing.status === 'granted') {
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        setUserLocation({
+          latitude: current.coords.latitude,
+          longitude: current.coords.longitude,
+        });
+        setDistanceFilterKm(km);
+        return;
+      }
+
+      // If permission was previously denied, guide to Settings
+      if (permissionRequestedRef.current && existing.status === 'denied') {
+        Alert.alert(
+          t('location.permissionSettingsTitle'),
+          t('location.permissionSettingsMessage'),
+          [
+            {
+              text: t('location.permissionSettingsClose'),
+              style: 'cancel',
+            },
+            {
+              text: t('location.permissionSettingsOpen'),
+              onPress: () => Linking.openSettings(),
+            },
+          ]
+        );
+        return;
+      }
+
+      // Request permission directly - OS will show native dialog
+      permissionRequestedRef.current = true;
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        return;
+      }
+
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      setUserLocation({
+        latitude: current.coords.latitude,
+        longitude: current.coords.longitude,
+      });
+      setDistanceFilterKm(km);
+    } catch (err) {
+      console.warn('Failed to request location:', err);
+    }
+  }, [t]);
 
   const handleLocationPress = useCallback((location: Location) => {
     console.log(`Clicked on ${location.naam}`);
@@ -528,7 +835,10 @@ export default function LocationScreen() {
 
     return (
       <TouchableOpacity
-        style={styles.clubCard}
+        style={[
+          styles.clubCard,
+          location.is_featured && styles.featuredClubCard
+        ]}
         onPress={() => handleLocationPress(location)}
         activeOpacity={0.8}
       >
@@ -561,12 +871,12 @@ export default function LocationScreen() {
             <View style={styles.tagsRow}>
               {location.is_featured && (
                 <View style={styles.featuredTag}>
-                  <Text style={styles.featuredText}>⭐ Featured</Text>
+                  <Text style={styles.featuredText}>⭐ {t('region.featured')}</Text>
                 </View>
               )}
               {location.is_partner && (
                 <View style={styles.partnerTag}>
-                  <Text style={styles.partnerText}>🤝 Partner</Text>
+                  <Text style={styles.partnerText}>🤝 {t('region.partner')}</Text>
                 </View>
               )}
             </View>
@@ -575,7 +885,7 @@ export default function LocationScreen() {
 
         {location.sports.length > 0 && (
           <View style={styles.infoRow}>
-            <Text style={styles.infoEmoji}>⚽</Text>
+            <Text style={styles.infoEmoji}>{getSportEmoji(location.sports, location.sport)}</Text>
             <Text style={styles.infoText}>{location.sports.map(capitalizeText).join(', ')}</Text>
           </View>
         )}
@@ -583,20 +893,33 @@ export default function LocationScreen() {
           <Text style={styles.infoEmoji}>📍</Text>
           <Text style={styles.infoText}>{location.adres}</Text>
         </View>
-        {location.kosten !== 'Prijs op aanvraag' && location.kosten !== 'Price on request' && (
+        {location.kosten !== '' && (
           <View style={styles.infoRow}>
             <Text style={styles.infoEmoji}>💰</Text>
-            <Text style={styles.infoText}>{location.kosten}</Text>
+            {(() => {
+              const parts = splitCostLabel(location.kosten);
+              if (!parts) {
+                return <Text style={styles.infoText}>{location.kosten}</Text>;
+              }
+              return (
+                <Text style={styles.infoText}>
+                  {parts.prefix} <Text style={styles.infoTextEmphasis}>{parts.timeframe}</Text>
+                </Text>
+              );
+            })()}
           </View>
         )}
-        {location.faciliteitenLijst.length > 0 &&
-         !location.faciliteitenLijst.includes('Unknown') &&
-         !location.faciliteitenLijst.includes('Niet bekend') && (
-          <View style={styles.infoRow}>
-            <Text style={styles.infoEmoji}>🏛️</Text>
-            <Text style={styles.infoText}>{location.faciliteitenLijst.map(capitalizeText).join(', ')}</Text>
-          </View>
-        )}
+        {(() => {
+          const validFacilities = location.faciliteitenLijst.filter(
+            (f) => f && f.toLowerCase() !== 'unknown' && f.toLowerCase() !== 'niet bekend'
+          );
+          return validFacilities.length > 0 ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoEmoji}>🏛️</Text>
+              <Text style={styles.infoText}>{validFacilities.map(capitalizeText).join(', ')}</Text>
+            </View>
+          ) : null;
+        })()}
 
         {location.lidWordenMogelijk && location.website && (
           <TouchableOpacity
@@ -670,9 +993,11 @@ export default function LocationScreen() {
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backText}>← {t('region.back')}</Text>
-          </TouchableOpacity>
+          <View style={styles.headerTopRow}>
+            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+              <Text style={styles.backText}>← {t('region.back')}</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.title}>{t('region.locations')} {region?.region_name}</Text>
           <Text style={styles.subtitle}>
             {filteredLocations.length} {t('region.locationsFound')}
@@ -680,6 +1005,7 @@ export default function LocationScreen() {
         </View>
 
         <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false}>
+
           {/* Search */}
           <View style={styles.searchContainer}>
             <TextInput
@@ -693,21 +1019,57 @@ export default function LocationScreen() {
 
           {/* Filter Toggle Button */}
           <View style={styles.filterToggleContainer}>
-            <TouchableOpacity
-              style={styles.filterToggleButton}
-              onPress={() => setShowFilters(!showFilters)}
-            >
-              <Text style={styles.filterToggleText}>
-                {showFilters ? `▲ ${t('region.hideFilters')}` : `▼ ${t('region.filters')}`}
-              </Text>
-              {(selectedSports.length > 0 || selectedFaciliteiten.length > 0 || kostenFilterActive) && (
-                <View style={styles.filterBadge}>
-                  <Text style={styles.filterBadgeText}>
-                    {selectedSports.length + selectedFaciliteiten.length + (kostenFilterActive ? 1 : 0)}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            <View style={styles.filterToggleRow}>
+              <TouchableOpacity
+                style={[
+                  styles.filterToggleButton,
+                  showFilters && styles.filterToggleButtonActive,
+                ]}
+                onPress={() => setShowFilters(!showFilters)}
+              >
+                <Text
+                  style={[
+                    styles.filterToggleText,
+                    showFilters && styles.filterToggleTextActive,
+                  ]}
+                >
+                  {showFilters ? t('region.hideFilters') : t('region.filters')}
+                </Text>
+                {activeFilterCount > 0 && (
+                  <View
+                    style={[
+                      styles.filterBadge,
+                      showFilters && styles.filterBadgeActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.filterBadgeText,
+                        showFilters && styles.filterBadgeTextActive,
+                      ]}
+                    >
+                      {activeFilterCount}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.mapToggleButton}
+                onPress={() => router.push(`/region/${regionSlug}/map` as any)}
+                activeOpacity={0.8}
+              >
+                <LinearGradient
+                  colors={['#0b2419', '#1a3b30']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.mapToggleGradient}
+                >
+                  <Text style={styles.mapToggleIcon}>🗺️</Text>
+                  <Text style={styles.mapToggleText}>{t('home.map')}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Filters */}
@@ -742,25 +1104,67 @@ export default function LocationScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {/* Kosten per jaar */}
+                {/* Kosten */}
                 <View style={styles.filterRow}>
-                  <Text style={styles.filterLabel}>{t('region.costPerYear')}:</Text>
+                  <Text style={styles.filterLabel}>{t('filter.costStructure')}:</Text>
                   <TouchableOpacity
                     style={[styles.kostenToggle, kostenFilterActive && styles.kostenToggleActive]}
                     onPress={() => openFilterModal('kosten')}
                   >
                     <Text style={[styles.kostenToggleText, kostenFilterActive && styles.kostenToggleTextActive]}>
-                      {kostenFilterActive ? 'Actief' : 'Selecteer'}
+                      {kostenFilterActive ? t('filter.active') : t('filter.select')}
                     </Text>
                   </TouchableOpacity>
+                </View>
+
+                {/* Afstand */}
+                <View style={styles.filterRow}>
+                  <Text style={styles.filterLabel}>{t('filter.distance')}:</Text>
+                  <View style={styles.distanceRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.distanceButton,
+                        distanceFilterKm === null && styles.distanceButtonActive,
+                      ]}
+                      onPress={() => handleDistanceSelect(null)}
+                    >
+                      <Text
+                        style={[
+                          styles.distanceButtonText,
+                          distanceFilterKm === null && styles.distanceButtonTextActive,
+                        ]}
+                      >
+                        {t('filter.allDistances')}
+                      </Text>
+                    </TouchableOpacity>
+                    {distanceOptions.map((km) => (
+                      <TouchableOpacity
+                        key={km}
+                        style={[
+                          styles.distanceButton,
+                          distanceFilterKm === km && styles.distanceButtonActive,
+                        ]}
+                        onPress={() => handleDistanceSelect(km)}
+                      >
+                        <Text
+                          style={[
+                            styles.distanceButtonText,
+                            distanceFilterKm === km && styles.distanceButtonTextActive,
+                          ]}
+                        >
+                          {km} km
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
                 </View>
               </View>
 
               {/* Reset Button */}
               {(selectedSports.length > 0 || kostenFilterActive || selectedFaciliteiten.length > 0 || searchQuery !== '') && (
                 <View style={styles.resetButtonContainer}>
-                  <TouchableOpacity style={styles.resetButton} onPress={resetFilters}>
-                    <Text style={styles.resetButtonText}>Reset alle filters</Text>
+                  <TouchableOpacity style={styles.resetButton} onPress={resetAllFilters}>
+                    <Text style={styles.resetButtonText}>{t('filter.resetAll')}</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -890,7 +1294,7 @@ export default function LocationScreen() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            <View style={styles.modalFooter}>
+            <View style={styles.modalFooterCompact}>
               <TouchableOpacity style={styles.modalApplyButton} onPress={applyFilterModal}>
                 <Text style={styles.modalApplyButtonText}>{t('filter.apply')}</Text>
               </TouchableOpacity>
@@ -963,39 +1367,82 @@ export default function LocationScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('region.costPerYear')}</Text>
+              <Text style={styles.modalTitle}>{t('filter.costStructure')}</Text>
               <TouchableOpacity onPress={closeFilterModal}>
                 <Text style={styles.modalCloseButton}>✕</Text>
               </TouchableOpacity>
             </View>
-            <View style={[styles.modalContent, { padding: 20 }]}>
-              <View style={styles.rangeContainer}>
-                <View style={styles.rangeInputContainer}>
-                  <Text style={styles.rangeLabel}>Min €</Text>
-                  <TextInput
-                    style={styles.rangeInput}
-                    value={tempMinKosten}
-                    onChangeText={setTempMinKosten}
-                    placeholder="0"
-                    placeholderTextColor="#666"
-                    keyboardType="numeric"
-                  />
-                </View>
-                <Text style={styles.rangeSeparator}>-</Text>
-                <View style={styles.rangeInputContainer}>
-                  <Text style={styles.rangeLabel}>Max €</Text>
-                  <TextInput
-                    style={styles.rangeInput}
-                    value={tempMaxKosten}
-                    onChangeText={setTempMaxKosten}
-                    placeholder="999"
-                    placeholderTextColor="#666"
-                    keyboardType="numeric"
-                  />
-                </View>
+            <View style={[styles.modalContent, { padding: 20, paddingBottom: 0 }]}>
+              <Text style={styles.modalSectionLabel}>{t('filter.costStructure')}</Text>
+              <View style={styles.costStructureRow}>
+                {costStructureOptions.map((option) => (
+                  <TouchableOpacity
+                    key={option.key}
+                    style={[
+                      styles.costStructureButton,
+                      tempCostStructure === option.key && styles.costStructureButtonActive,
+                    ]}
+                    onPress={() => setTempCostStructure(option.key)}
+                  >
+                    <Text
+                      style={[
+                        styles.costStructureButtonText,
+                        tempCostStructure === option.key && styles.costStructureButtonTextActive,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
+
+              {tempCostStructure && (
+                <>
+                  <Text style={[styles.modalSectionLabel, styles.modalSectionLabelCompact]}>
+                    {t('filter.costRange')}
+                  </Text>
+                  <View style={styles.rangeContainer}>
+                    <View style={styles.rangeInputContainer}>
+                      <Text style={styles.rangeLabel}>Min €</Text>
+                      <TextInput
+                        style={styles.rangeInput}
+                        value={tempMinKosten}
+                        onChangeText={setTempMinKosten}
+                        placeholder="0"
+                        placeholderTextColor="#666"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    <Text style={styles.rangeSeparator}>-</Text>
+                    <View style={styles.rangeInputContainer}>
+                      <Text style={styles.rangeLabel}>Max €</Text>
+                      <TextInput
+                        style={styles.rangeInput}
+                        value={tempMaxKosten}
+                        onChangeText={setTempMaxKosten}
+                        placeholder="999"
+                        placeholderTextColor="#666"
+                        keyboardType="numeric"
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.rangeFooter}>
+                    <TouchableOpacity
+                      style={styles.rangeResetButton}
+                      onPress={() => {
+                        setTempMinKosten('');
+                        setTempMaxKosten('');
+                        setTempCostStructure(null);
+                        setActiveFilterModal(null);
+                      }}
+                    >
+                      <Text style={styles.rangeResetButtonText}>{t('filter.resetCost')}</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </View>
-            <View style={styles.modalFooter}>
+            <View style={styles.modalFooterCompact}>
               <TouchableOpacity style={styles.modalApplyButton} onPress={applyFilterModal}>
                 <Text style={styles.modalApplyButtonText}>{t('filter.apply')}</Text>
               </TouchableOpacity>
@@ -1083,8 +1530,48 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     backgroundColor: '#050f08',
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  mapToggleButton: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(4, 225, 178, 0.35)',
+    height: 40,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
+    flex: 1,
+  },
+  mapToggleGradient: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  mapToggleIcon: {
+    fontSize: 15,
+    color: '#ffffff',
+  },
+  mapToggleText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   backButton: {
-    marginBottom: 15,
+    paddingVertical: 4,
   },
   backText: {
     fontSize: 16,
@@ -1107,6 +1594,7 @@ const styles = StyleSheet.create({
   contentScroll: {
     flex: 1,
   },
+
   
   // Search
   searchContainer: {
@@ -1128,34 +1616,83 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 15,
   },
+  filterToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
   filterToggleButton: {
     backgroundColor: '#1a3b30',
-    borderRadius: 15,
-    paddingVertical: 15,
-    paddingHorizontal: 20,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(4, 225, 178, 0.35)',
+    height: 40,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
+    flex: 1,
+  },
+  filterToggleButtonActive: {
+    backgroundColor: '#04e1b2',
+    borderColor: '#04e1b2',
   },
   filterToggleText: {
-    fontSize: 16,
+    fontSize: 12,
+    color: '#04e1b2',
+    fontWeight: '600',
+    flex: 1,
+    textAlign: 'center',
+  },
+  filterToggleTextActive: {
+    color: '#0b2419',
+  },
+  filterBadge: {
+    backgroundColor: '#0b2419',
+    borderRadius: 12,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  filterBadgeText: {
+    fontSize: 11,
+    color: '#04e1b2',
+    fontWeight: '700',
+  },
+  filterBadgeActive: {
+    backgroundColor: '#04e1b2',
+  },
+  filterBadgeTextActive: {
+    color: '#0b2419',
+  },
+  distanceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  distanceButton: {
+    backgroundColor: '#1a3b30',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(4, 225, 178, 0.35)',
+  },
+  distanceButtonActive: {
+    backgroundColor: '#04e1b2',
+    borderColor: '#04e1b2',
+  },
+  distanceButtonText: {
+    fontSize: 12,
     color: '#04e1b2',
     fontWeight: '600',
   },
-  filterBadge: {
-    backgroundColor: '#04e1b2',
-    borderRadius: 12,
-    minWidth: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  filterBadgeText: {
-    fontSize: 12,
+  distanceButtonTextActive: {
     color: '#0b2419',
-    fontWeight: '700',
   },
 
   // Filters
@@ -1267,6 +1804,65 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0b2419',
   },
+  modalSectionLabel: {
+    color: '#04e1b2',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  modalSectionLabelCompact: {
+    marginBottom: 2,
+  },
+  costStructureRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 16,
+  },
+  costStructureButton: {
+    backgroundColor: '#1a3b30',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(4, 225, 178, 0.35)',
+  },
+  costStructureButtonActive: {
+    backgroundColor: '#04e1b2',
+    borderColor: '#04e1b2',
+  },
+  costStructureButtonText: {
+    color: '#04e1b2',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  costStructureButtonTextActive: {
+    color: '#0b2419',
+  },
+  rangeHelperText: {
+    color: '#ffffff',
+    fontSize: 12,
+    opacity: 0.7,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  rangeFooter: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  rangeResetButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#1a3b30',
+    borderWidth: 1,
+    borderColor: 'rgba(4, 225, 178, 0.35)',
+  },
+  rangeResetButtonText: {
+    color: '#04e1b2',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   rangeSeparator: {
     color: '#04e1b2',
     fontSize: 16,
@@ -1303,6 +1899,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
+  },
+  featuredClubCard: {
+    borderWidth: 4,
+    borderColor: '#04e1b2',
   },
   clubCardGradient: {
     padding: 20,
@@ -1348,13 +1948,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   partnerTag: {
-    backgroundColor: '#ff6b6b',
+    backgroundColor: '#04e1b2',
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
   },
   partnerText: {
-    color: '#ffffff',
+    color: '#0b2419',
     fontSize: 10,
     fontWeight: '700',
   },
@@ -1397,6 +1997,9 @@ const styles = StyleSheet.create({
     color: '#1a3b30',
     lineHeight: 20,
     flex: 1,
+  },
+  infoTextEmphasis: {
+    fontWeight: '700',
   },
   lidWordenButtonContainer: {
     marginTop: 15,
@@ -1571,6 +2174,13 @@ const styles = StyleSheet.create({
   },
   modalFooter: {
     padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(4, 225, 178, 0.2)',
+  },
+  modalFooterCompact: {
+    paddingTop: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: 'rgba(4, 225, 178, 0.2)',
   },
