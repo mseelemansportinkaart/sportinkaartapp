@@ -64,7 +64,6 @@ yarn-debug.*
 yarn-error.*
 
 # Tests
-__tests__/
 coverage/
 
 # macOS
