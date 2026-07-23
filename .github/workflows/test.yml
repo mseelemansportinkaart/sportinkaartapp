@@ -99,9 +99,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Homebrew refuses to load formulae from third-party taps unless they are
+      # explicitly trusted, so the `brew trust` step is required, not optional.
       - name: Install applesimutils
         run: |
           brew tap wix/brew
+          brew trust --formula wix/brew/applesimutils
           brew install applesimutils
 
       # Only the download/spec caches — `ios/Pods` itself is pointless to cache
