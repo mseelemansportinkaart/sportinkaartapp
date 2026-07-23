@@ -19,6 +19,18 @@
 
 - `npm run validate` runs lint + typecheck + tests. Run it before merging.
 
+## Building & releasing
+
+- **Always build with `npm run build:ios` / `npm run build:android`, never
+  `eas build` directly.** These run `scripts/preflight-build.js` first, which
+  aborts the build unless you are on `main`, your tree is clean, your local
+  `main` matches `origin/main`, and `lib/supabase.js` points at a live Supabase
+  project. EAS builds from committed git state, so a stale or dirty local clone
+  otherwise ships the wrong code silently — this guard exists because that once
+  reached the App Store.
+- If the guard blocks you, it prints the exact fix (usually `git pull origin
+  main`). Fix it and re-run — don't bypass it.
+
 ## E2E (Detox)
 
 - The suite is `__tests__/e2e/smoke.test.ts` and it is deliberately narrow: the
