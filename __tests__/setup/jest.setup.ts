@@ -1,5 +1,12 @@
 import '@testing-library/react-native/extend-expect';
 
+// `lib/mapboxRuntime` treats a missing access token as "map unavailable" and the
+// screens then render their fallback instead of a map, so the suites that assert
+// on markers need a token present. Any non-empty value works — @rnmapbox/maps is
+// mocked below, so the token is never sent anywhere.
+process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN =
+  process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.test-token-not-a-real-credential';
+
 // Mock AsyncStorage
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
