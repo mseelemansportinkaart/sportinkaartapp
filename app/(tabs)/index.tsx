@@ -464,10 +464,11 @@ export default function HomeScreen() {
   const MapboxLib = mapbox as NonNullable<typeof Mapbox>;
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="home-screen">
       <View style={styles.mapPreviewWrapper}>
         {isMapboxAvailable && mapbox ? (
           <MapboxLib.MapView
+            testID="home-map"
             style={styles.mapPreview}
             styleURL={DEFAULT_MAP_STYLE}
             onCameraChanged={handleCameraChanged}
@@ -615,6 +616,7 @@ export default function HomeScreen() {
 
       <View style={styles.fixedButtonBar}>
         <TouchableOpacity
+          testID="favorites-button"
           style={styles.favoritesButtonWrapper}
           onPress={() => router.push('/(tabs)/favorites')}
           activeOpacity={0.8}
@@ -631,6 +633,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          testID="contact-button"
           style={styles.contactButtonWrapper}
           onPress={handleContactPress}
           activeOpacity={0.8}

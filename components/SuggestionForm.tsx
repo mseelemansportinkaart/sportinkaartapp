@@ -281,11 +281,12 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
   };
 
   const renderFormTypeSelection = () => (
-    <View style={styles.content}>
+    <View style={styles.content} testID="suggestion-form-type-selection">
       <Text style={styles.title}>{t('form.selectType')}</Text>
       <Text style={styles.subtitle}>{t('form.selectTypeSubtitle')}</Text>
 
       <TouchableOpacity
+        testID="form-type-add"
         style={styles.optionButton}
         onPress={() => handleFormTypeSelect('add')}
       >
@@ -300,6 +301,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
       </TouchableOpacity>
 
       <TouchableOpacity
+        testID="form-type-change"
         style={styles.optionButton}
         onPress={() => handleFormTypeSelect('change')}
       >
@@ -314,6 +316,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
       </TouchableOpacity>
 
       <TouchableOpacity
+        testID="form-type-other"
         style={styles.optionButton}
         onPress={() => handleFormTypeSelect('other')}
       >
@@ -327,7 +330,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         <Text style={styles.arrow}>→</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.cancelButton} onPress={handleClose}>
+      <TouchableOpacity testID="form-cancel" style={styles.cancelButton} onPress={handleClose}>
         <Text style={styles.cancelButtonText}>{t('form.cancel')}</Text>
       </TouchableOpacity>
     </View>
@@ -439,7 +442,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.cancelButton} onPress={handleClose}>
+      <TouchableOpacity testID="form-cancel" style={styles.cancelButton} onPress={handleClose}>
         <Text style={styles.cancelButtonText}>{t('form.cancel')}</Text>
       </TouchableOpacity>
     </View>
@@ -555,7 +558,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         </Text>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.cancelButton} onPress={handleClose}>
+      <TouchableOpacity testID="form-cancel" style={styles.cancelButton} onPress={handleClose}>
         <Text style={styles.cancelButtonText}>{t('form.cancel')}</Text>
       </TouchableOpacity>
     </View>
@@ -569,6 +572,7 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
       onRequestClose={handleClose}
     >
       <KeyboardAvoidingView
+        testID="suggestion-form-modal"
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.container}
       >

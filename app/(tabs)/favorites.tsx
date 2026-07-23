@@ -58,7 +58,7 @@ export default function FavoritesScreen() {
 
   if (loading) {
     return (
-      <View style={styles.container}>
+      <View style={styles.container} testID="favorites-screen">
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Text style={styles.backText}>← {t('favorites.back')}</Text>
@@ -76,7 +76,7 @@ export default function FavoritesScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="favorites-screen">
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -89,7 +89,7 @@ export default function FavoritesScreen() {
       </View>
 
       {favoriteClubs.length === 0 ? (
-        <View style={styles.emptyContainer}>
+        <View style={styles.emptyContainer} testID="favorites-empty">
           <View style={styles.emptyIconContainer}>
             <Text style={styles.emptyIcon}>💔</Text>
           </View>
@@ -98,6 +98,7 @@ export default function FavoritesScreen() {
             {t('favorites.noFavoritesSubtext')}
           </Text>
           <TouchableOpacity
+            testID="explore-button"
             style={styles.exploreButtonContainer}
             onPress={() => router.back()}
             activeOpacity={0.8}
@@ -111,10 +112,15 @@ export default function FavoritesScreen() {
           </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          testID="favorites-list"
+          style={styles.scrollContainer}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Search bar */}
           <View style={styles.searchContainer}>
             <TextInput
+              testID="favorites-search"
               style={styles.searchInput}
               placeholder={t('favorites.searchPlaceholder')}
               placeholderTextColor="#1a3b30"
@@ -136,7 +142,9 @@ export default function FavoritesScreen() {
                   colors={['#04e1b2', '#1a3b30']}
                   style={styles.statCardGradient}
                 >
-                  <Text style={styles.statNumber}>{favoriteClubs.length}</Text>
+                  <Text style={styles.statNumber} testID="favorites-count">
+                    {favoriteClubs.length}
+                  </Text>
                   <Text style={styles.statLabel}>{t('favorites.statFavorites')}</Text>
                   <Text style={styles.statIcon}>❤️</Text>
                 </LinearGradient>
@@ -146,7 +154,7 @@ export default function FavoritesScreen() {
                   colors={['#1a3b30', '#04e1b2']}
                   style={styles.statCardGradient}
                 >
-                  <Text style={styles.statNumber}>
+                  <Text style={styles.statNumber} testID="sports-count">
                     {new Set(favoriteClubs.map(club => club.sport)).size}
                   </Text>
                   <Text style={styles.statLabel}>{t('favorites.statSports')}</Text>
@@ -166,9 +174,10 @@ export default function FavoritesScreen() {
                 </Text>
               </View>
             ) : (
-              filteredFavorites.map((club) => (
+              filteredFavorites.map((club, index) => (
                 <TouchableOpacity
                   key={club.id}
+                  testID={`favorite-item-${index}`}
                   style={[
                     styles.favoriteCard,
                     club.is_featured && styles.featuredCard

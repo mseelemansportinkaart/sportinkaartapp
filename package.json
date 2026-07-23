@@ -17,6 +17,8 @@
     "test:map": "jest --testPathPattern='__tests__/(unit/map|integration/screens/MapHomepage)'",
     "test:components": "jest --testPathPattern='__tests__/components'",
     "test:ci": "jest --ci --coverage --reporters=default",
+    "test:e2e:prebuild:ios": "DETOX_BUILD=1 expo prebuild --platform ios",
+    "test:e2e:prebuild:android": "DETOX_BUILD=1 expo prebuild --platform android",
     "test:e2e:ios": "detox test --configuration ios.sim.debug",
     "test:e2e:android": "detox test --configuration android.emu.debug",
     "test:e2e:build:ios": "detox build --configuration ios.sim.debug",

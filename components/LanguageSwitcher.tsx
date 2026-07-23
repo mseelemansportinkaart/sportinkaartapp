@@ -18,6 +18,7 @@ export function LanguageSwitcher({ inline = false }: LanguageSwitcherProps) {
   return (
     <>
       <TouchableOpacity
+        testID="language-switcher"
         style={inline ? styles.flagButtonInline : styles.flagButton}
         onPress={() => setModalVisible(true)}
         activeOpacity={0.8}
@@ -36,10 +37,11 @@ export function LanguageSwitcher({ inline = false }: LanguageSwitcherProps) {
           activeOpacity={1}
           onPress={() => setModalVisible(false)}
         >
-          <View style={styles.modalContainer}>
+          <View style={styles.modalContainer} testID="language-modal">
             <Text style={styles.modalTitle}>{t('language.selectLanguage')}</Text>
 
             <TouchableOpacity
+              testID="language-option-nl"
               style={[
                 styles.languageOption,
                 language === 'nl' && styles.languageOptionSelected,
@@ -57,6 +59,7 @@ export function LanguageSwitcher({ inline = false }: LanguageSwitcherProps) {
             </TouchableOpacity>
 
             <TouchableOpacity
+              testID="language-option-en"
               style={[
                 styles.languageOption,
                 language === 'en' && styles.languageOptionSelected,

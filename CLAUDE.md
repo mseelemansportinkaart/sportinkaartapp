@@ -19,20 +19,34 @@
 
 - `npm run validate` runs lint + typecheck + tests. Run it before merging.
 
-## Known follow-ups / TODO
+## E2E (Detox)
 
-- **E2E CI not wired up.** The `e2e-ios` / `e2e-android` Detox jobs in
-  `.github/workflows/test.yml` are marked `continue-on-error` (non-blocking)
-  because they can't pass as written: this is a managed Expo project with no
-  committed `ios/`/`android/` directories, and the jobs run `pod install` /
-  `detox build` without first generating the native projects. To make them
-  real: add `npx expo prebuild --platform <ios|android>` before the build step
-  in each job, provide a Mapbox download token for the `@rnmapbox/maps` pods
-  (e.g. `RNMapboxMapsDownloadToken` / `.netrc`), and confirm the simulator/
-  emulator boot. Remove `continue-on-error` once they pass. The Detox tests
-  themselves live in `__tests__/e2e/` and can be run locally.
+- The suite is `__tests__/e2e/smoke.test.ts` and it is deliberately narrow: the
+  always-on-screen chrome, language switching, the suggestion form, and the
+  favorites empty state. It avoids anything that depends on Supabase data or on
+  Mapbox finishing a tile/marker render, so it can stay green in CI.
+- `ios/` and `android/` are **not** committed (managed Expo project), so a
+  native project has to be generated before any Detox build:
 
-- **Suggestion-form email (RESEND_API_KEY).** `app/api/send-suggestion+api.ts`
-  needs `RESEND_API_KEY` set in the environment where the Expo Router API route
-  is hosted (the route runs server-side, not in the app bundle). Without it the
-  form returns an error but the app doesn't crash.
+      DETOX_BUILD=1 npx expo prebuild --platform ios
+      DETOX_BUILD=1 npx expo prebuild --platform android
+
+  `DETOX_BUILD=1` makes `app.config.js` apply `plugins/withDetox.js`, which adds
+  the native Detox wiring prebuild doesn't generate (instrumentation runner,
+  `DetoxTest.java`, the Detox maven repo, cleartext traffic to the emulator
+  host, proguard rules). It is gated on the env var so none of that lands in a
+  build that ships to users.
+- `plugins/withDetox.js` is a vendored equivalent of `@config-plugins/detox`,
+  which can't be depended on directly: it declares `peer expo@^53` and this
+  project is on Expo 54, so `npm ci` fails with ERESOLVE.
+- CI runs against the newest simulator the runner's Xcode ships (picked at
+  runtime into `DETOX_IOS_DEVICE`) and, on Android, against whatever emulator
+  `reactivecircus/android-emulator-runner` has booted — hence the
+  `android.att.release` (attached device) configuration rather than
+  `android.emu.*`, which would need the AVD's name.
+- A Mapbox download token is **not** needed: `@rnmapbox/maps` v10.2.x reads
+  `RNMAPBOX_MAPS_DOWNLOAD_TOKEN` from the environment only when set, and Mapbox
+  has dropped the download-token requirement. The `RNMapboxMapsDownloadToken`
+  plugin prop is deprecated and bakes the secret into the Podfile — don't use it.
+- `EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time, so they
+  must be present during `detox build`, not `detox test`.
