@@ -12,6 +12,43 @@ import { by, device, element, expect, waitFor } from 'detox';
  * These require a native build (`ios/` and `android/` are generated, not
  * committed) — see the header of `.detoxrc.js`.
  */
+
+// Cold start of a release build on a freshly installed simulator/emulator is
+// slow — observed at ~57s on a CI iOS runner — so the first wait of each test
+// has to be generous. Later waits are for transitions, not launches.
+const LAUNCH_TIMEOUT = 120000;
+const TRANSITION_TIMEOUT = 15000;
+
+/**
+ * Opens the suggestion form and waits for it to be interactive.
+ *
+ * Deliberately asserts on a button inside the form rather than on the container:
+ * the form is a `presentationStyle="pageSheet"` Modal, which iOS hosts in a
+ * separate window where Detox does not match the wrapper's testID — even though
+ * everything inside it matches fine.
+ */
+async function openSuggestionForm() {
+  await element(by.id('contact-button')).tap();
+  await waitFor(element(by.id('form-type-add')))
+    .toBeVisible()
+    .withTimeout(TRANSITION_TIMEOUT);
+}
+
+/**
+ * Dismisses the suggestion form.
+ *
+ * The cancel button sits below the fold of the form's ScrollView, and Detox
+ * refuses to tap a view that is less than 75% visible, so it has to be scrolled
+ * into view first.
+ */
+async function closeSuggestionForm() {
+  await waitFor(element(by.id('form-cancel')))
+    .toBeVisible()
+    .whileElement(by.id('suggestion-form-scroll'))
+    .scroll(200, 'down');
+  await element(by.id('form-cancel')).tap();
+}
+
 describe('Smoke', () => {
   beforeAll(async () => {
     await device.launchApp({ delete: true });
@@ -29,10 +66,14 @@ describe('Smoke', () => {
     it('renders the home screen', async () => {
       await waitFor(element(by.id('home-screen')))
         .toBeVisible()
-        .withTimeout(30000);
+        .withTimeout(LAUNCH_TIMEOUT);
     });
 
     it('shows the favorites, contact and language controls', async () => {
+      await waitFor(element(by.id('home-screen')))
+        .toBeVisible()
+        .withTimeout(LAUNCH_TIMEOUT);
+
       await expect(element(by.id('favorites-button'))).toBeVisible();
       await expect(element(by.id('contact-button'))).toBeVisible();
       await expect(element(by.id('language-switcher'))).toBeVisible();
@@ -41,37 +82,40 @@ describe('Smoke', () => {
 
   describe('Language switching', () => {
     it('switches to English and back to Dutch', async () => {
+      await waitFor(element(by.id('language-switcher')))
+        .toBeVisible()
+        .withTimeout(LAUNCH_TIMEOUT);
+
       await element(by.id('language-switcher')).tap();
       await waitFor(element(by.id('language-modal')))
         .toBeVisible()
-        .withTimeout(5000);
+        .withTimeout(TRANSITION_TIMEOUT);
       await element(by.id('language-option-en')).tap();
 
       // The suggestion form is the nearest screen with stable, translated copy.
-      await element(by.id('contact-button')).tap();
-      await waitFor(element(by.text('How can we help?')))
-        .toBeVisible()
-        .withTimeout(5000);
-      await element(by.id('form-cancel')).tap();
+      await openSuggestionForm();
+      await expect(element(by.text('How can we help?'))).toBeVisible();
+      await closeSuggestionForm();
 
       await element(by.id('language-switcher')).tap();
+      await waitFor(element(by.id('language-modal')))
+        .toBeVisible()
+        .withTimeout(TRANSITION_TIMEOUT);
       await element(by.id('language-option-nl')).tap();
 
-      await element(by.id('contact-button')).tap();
-      await waitFor(element(by.text('Hoe kunnen we helpen?')))
-        .toBeVisible()
-        .withTimeout(5000);
-      await element(by.id('form-cancel')).tap();
+      await openSuggestionForm();
+      await expect(element(by.text('Hoe kunnen we helpen?'))).toBeVisible();
+      await closeSuggestionForm();
     });
   });
 
   describe('Suggestion form', () => {
     it('opens from the contact button and offers the three form types', async () => {
-      await element(by.id('contact-button')).tap();
-
-      await waitFor(element(by.id('suggestion-form-modal')))
+      await waitFor(element(by.id('contact-button')))
         .toBeVisible()
-        .withTimeout(5000);
+        .withTimeout(LAUNCH_TIMEOUT);
+
+      await openSuggestionForm();
 
       await expect(element(by.id('form-type-add'))).toBeVisible();
       await expect(element(by.id('form-type-change'))).toBeVisible();
@@ -79,44 +123,49 @@ describe('Smoke', () => {
     });
 
     it('closes again when cancel is tapped', async () => {
-      await element(by.id('contact-button')).tap();
-      await waitFor(element(by.id('suggestion-form-modal')))
+      await waitFor(element(by.id('contact-button')))
         .toBeVisible()
-        .withTimeout(5000);
+        .withTimeout(LAUNCH_TIMEOUT);
 
-      await element(by.id('form-cancel')).tap();
+      await openSuggestionForm();
+      await closeSuggestionForm();
 
-      await waitFor(element(by.id('suggestion-form-modal')))
+      await waitFor(element(by.id('form-type-add')))
         .not.toBeVisible()
-        .withTimeout(5000);
+        .withTimeout(TRANSITION_TIMEOUT);
       await expect(element(by.id('home-screen'))).toBeVisible();
     });
   });
 
   describe('Favorites', () => {
     it('opens the favorites screen and shows the empty state on a fresh install', async () => {
+      await waitFor(element(by.id('favorites-button')))
+        .toBeVisible()
+        .withTimeout(LAUNCH_TIMEOUT);
+
       await element(by.id('favorites-button')).tap();
 
-      await waitFor(element(by.id('favorites-screen')))
-        .toBeVisible()
-        .withTimeout(10000);
       await waitFor(element(by.id('favorites-empty')))
         .toBeVisible()
-        .withTimeout(10000);
+        .withTimeout(TRANSITION_TIMEOUT);
       await expect(element(by.id('explore-button'))).toBeVisible();
     });
 
     it('returns to the home screen from the empty state', async () => {
+      await waitFor(element(by.id('favorites-button')))
+        .toBeVisible()
+        .withTimeout(LAUNCH_TIMEOUT);
+
       await element(by.id('favorites-button')).tap();
       await waitFor(element(by.id('explore-button')))
         .toBeVisible()
-        .withTimeout(10000);
+        .withTimeout(TRANSITION_TIMEOUT);
 
       await element(by.id('explore-button')).tap();
 
       await waitFor(element(by.id('home-screen')))
         .toBeVisible()
-        .withTimeout(10000);
+        .withTimeout(TRANSITION_TIMEOUT);
     });
   });
 });

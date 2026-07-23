@@ -576,7 +576,11 @@ export function SuggestionForm({ visible, onClose }: SuggestionFormProps) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.container}
       >
-        <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          testID="suggestion-form-scroll"
+          style={styles.scrollView}
+          showsVerticalScrollIndicator={false}
+        >
           {formType === null && renderFormTypeSelection()}
           {formType === 'add' && renderAddLocationForm()}
           {formType === 'change' && renderChangeLocationForm()}
