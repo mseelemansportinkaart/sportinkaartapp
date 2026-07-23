@@ -86,12 +86,6 @@ jobs:
     # Remove once this job passes.
     continue-on-error: true
     timeout-minutes: 90
-    env:
-      # EXPO_PUBLIC_* vars are inlined into the JS bundle at build time, so they
-      # have to be set here, not at test time.
-      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
-      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-      EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN: ${{ secrets.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -173,10 +167,6 @@ jobs:
     # Remove once this job passes.
     continue-on-error: true
     timeout-minutes: 90
-    env:
-      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
-      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-      EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN: ${{ secrets.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
