@@ -17,8 +17,12 @@ describe('Smoke', () => {
     await device.launchApp({ delete: true });
   });
 
+  // A full relaunch rather than `device.reloadReactNative()`: reloading only the
+  // JS bundle is faster, but Detox documents it as unstable for anything beyond
+  // a simple app, and this screen mounts a native Mapbox view and fires Supabase
+  // queries on mount. A few extra seconds per test is worth not chasing ghosts.
   beforeEach(async () => {
-    await device.reloadReactNative();
+    await device.launchApp({ newInstance: true });
   });
 
   describe('Home screen', () => {
