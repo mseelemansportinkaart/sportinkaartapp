@@ -84,3 +84,7 @@ app-example
 
 # Vercel
 .vercel
+
+# Finder duplicate copies ("icon 2.png"). Never intentional, and the pre-build
+# guard refuses to build while the tree is dirty.
+* 2.*
