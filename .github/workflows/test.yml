@@ -80,6 +80,10 @@ jobs:
     runs-on: macos-latest
     needs: [lint, typecheck, unit-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Non-blocking: this managed project has no committed native dirs and the job
+    # lacks an `expo prebuild` step, so it can't pass as-is. Kept for visibility
+    # until the E2E CI is properly set up (prebuild + Mapbox download token).
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -114,6 +118,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, typecheck, unit-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Non-blocking: this managed project has no committed native dirs and the job
+    # lacks an `expo prebuild` step, so it can't pass as-is. Kept for visibility
+    # until the E2E CI is properly set up (prebuild + Mapbox download token).
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
