@@ -62,3 +62,7 @@
   plugin prop is deprecated and bakes the secret into the Podfile — don't use it.
 - `EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time, so they
   must be present during `detox build`, not `detox test`.
+- **The two E2E jobs are `continue-on-error: true` for now** — not because
+  they're known-broken, but because they hadn't had a green run yet and an
+  unproven job shouldn't keep `main` red. Drop the flag from both once one
+  passes.
