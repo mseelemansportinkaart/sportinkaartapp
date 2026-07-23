@@ -10,6 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Supercluster from 'supercluster';
 
 // Type definitions
@@ -71,6 +72,25 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+// Supabase surfaces failures as PostgrestError — a plain object with a `message`
+// field, not an `Error` instance — so `instanceof Error` never catches it. Read
+// the message off whatever shape we get and only fall back when there's nothing.
+function extractErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  if (typeof err === 'string' && err.trim() !== '') {
+    return err;
+  }
+  if (err && typeof err === 'object') {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim() !== '') {
+      return message;
+    }
+  }
+  return fallback;
+}
+
 function getPinSize(zoomLevel: number): number {
   // Approximate marker scaling from Mapbox zoom levels.
   const scale = Math.max(0.65, Math.min(2.2, (zoomLevel - 4) / 7));
@@ -79,6 +99,7 @@ function getPinSize(zoomLevel: number): number {
 
 export default function HomeScreen() {
   const { t } = useLanguage();
+  const insets = useSafeAreaInsets();
   const [regions, setRegions] = useState<Region[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -159,8 +180,7 @@ export default function HomeScreen() {
       setRegions(combinedRegions);
     } catch (err) {
       console.error('Error fetching regions:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Er is een fout opgetreden bij het laden van de regios';
-      setError(errorMessage);
+      setError(extractErrorMessage(err, 'Er is een fout opgetreden bij het laden van de regios'));
     } finally {
       setLoading(false);
     }
@@ -578,13 +598,13 @@ export default function HomeScreen() {
       <Image source={SPORTINKAART_LOGO} style={styles.logo} />
 
       {loading && (
-        <View style={styles.loadingOverlay}>
+        <View style={[styles.loadingOverlay, { top: insets.top + 20 }]}>
           <ActivityIndicator size="large" color="#04e1b2" />
           <Text style={styles.loadingText}>{t('home.loading')}</Text>
         </View>
       )}
       {error && (
-        <View style={styles.errorOverlay}>
+        <View style={[styles.errorOverlay, { top: insets.top + 20 }]}>
           <Text style={styles.errorText}>{t('home.error')}</Text>
           <Text style={styles.errorMessage}>{error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={fetchRegions}>

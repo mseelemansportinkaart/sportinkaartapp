@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, RenderOptions } from '@testing-library/react-native';
 import React, { ReactElement } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { FavoritesProvider } from '@/contexts/FavoritesContext';
 import { FiltersProvider } from '@/contexts/FiltersContext';
 import { LanguageProvider } from '@/contexts/LanguageContext';
@@ -25,20 +26,29 @@ interface WrapperProps {
   children: React.ReactNode;
 }
 
+// Deterministic safe-area metrics so useSafeAreaInsets() resolves without a
+// native layout pass. Mirrors a typical device with a status-bar/notch inset.
+const TEST_SAFE_AREA_METRICS = {
+  frame: { x: 0, y: 0, width: 390, height: 844 },
+  insets: { top: 47, left: 0, right: 0, bottom: 34 },
+};
+
 // All providers wrapper for integration tests
 function AllProviders({ children }: WrapperProps) {
   const queryClient = createTestQueryClient();
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <LanguageProvider>
-        <FavoritesProvider>
-          <FiltersProvider>
-            {children}
-          </FiltersProvider>
-        </FavoritesProvider>
-      </LanguageProvider>
-    </QueryClientProvider>
+    <SafeAreaProvider initialMetrics={TEST_SAFE_AREA_METRICS}>
+      <QueryClientProvider client={queryClient}>
+        <LanguageProvider>
+          <FavoritesProvider>
+            <FiltersProvider>
+              {children}
+            </FiltersProvider>
+          </FavoritesProvider>
+        </LanguageProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 
