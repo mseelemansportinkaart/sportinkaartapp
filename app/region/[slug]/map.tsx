@@ -22,8 +22,18 @@ import {
   View,
 } from 'react-native';
 // Mapbox imports
-import { DEFAULT_MAP_STYLE, CAMERA_CONFIG } from '@/lib/mapboxConfig';
+import {
+  DEFAULT_MAP_STYLE,
+  CAMERA_CONFIG,
+  CLUSTERING_CONFIG,
+  LOCATION_CLUSTERING,
+  MARKER_CONFIG,
+} from '@/lib/mapboxConfig';
 import { getZoomFromDelta } from '@/utils/mapUtils';
+import {
+  buildLocationFeatureCollection,
+  collectEmojiIcons,
+} from '@/utils/locationFeatures';
 import { MapboxLocationPin } from '@/components/MapboxLocationPin';
 
 // Type alias for region (keeping compatibility with existing code)
@@ -93,8 +103,52 @@ const getNumericId = (uuidString: string | undefined | null): number => {
 
 // Constants
 const PAGE_SIZE = 1000;
-const EMOJI_SHOW_MAX_LAT_DELTA = CAMERA_CONFIG.EMOJI_THRESHOLD; // Use config value (0.05)
 const FIT_BOUNDS_PADDING: [number, number, number, number] = [180, 36, 90, 36]; // [top, right, bottom, left]
+
+const FAVORITE_ICON_KEY = 'location-favorite-heart';
+
+// Style objects for the clustered ShapeSource layers. Marker rendering lives on
+// the map thread, so panning/zooming never waits on React re-renders.
+const CLUSTER_CIRCLE_STYLE = {
+  circleColor: CLUSTERING_CONFIG.COLORS.BACKGROUND,
+  circleRadius: ['step', ['get', 'point_count'], 15, 10, 19, 25, 23, 75, 27],
+  circleStrokeWidth: 2,
+  circleStrokeColor: CLUSTERING_CONFIG.COLORS.TEXT,
+} as const;
+
+const CLUSTER_COUNT_STYLE = {
+  textField: ['to-string', ['get', 'point_count']],
+  textSize: 13,
+  textColor: CLUSTERING_CONFIG.COLORS.TEXT,
+  textAllowOverlap: true,
+  textIgnorePlacement: true,
+} as const;
+
+const LOCATION_DOT_STYLE = {
+  circleColor: MARKER_CONFIG.LOCATION_PIN.SELECTED_BACKGROUND_COLOR,
+  circleRadius: 6,
+  circleStrokeWidth: MARKER_CONFIG.LOCATION_PIN.BORDER_WIDTH,
+  circleStrokeColor: MARKER_CONFIG.LOCATION_PIN.BORDER_COLOR,
+} as const;
+
+const EMOJI_PIN_STYLE = {
+  iconImage: ['get', 'emojiIcon'],
+  iconAnchor: 'bottom',
+  iconOffset: [0, -9],
+  iconAllowOverlap: true,
+  iconIgnorePlacement: true,
+} as const;
+
+const FAVORITE_BADGE_STYLE = {
+  iconImage: FAVORITE_ICON_KEY,
+  iconAnchor: 'bottom',
+  iconOffset: [-14, -24],
+  iconAllowOverlap: true,
+  iconIgnorePlacement: true,
+} as const;
+
+const CLUSTER_FILTER = ['has', 'point_count'] as const;
+const SINGLE_POINT_FILTER = ['!', ['has', 'point_count']] as const;
 
 const toFiniteNumber = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -186,7 +240,6 @@ export default function RegionMapScreen() {
   const [facilities, setFacilities] = useState<Facility[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showEmojiPins, setShowEmojiPins] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<Location | null>(null);
 
   useEffect(() => {
@@ -211,8 +264,12 @@ export default function RegionMapScreen() {
   const invalidCoordsLogRef = useRef<Set<string>>(new Set());
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
+  const shapeSourceRef = useRef<any>(null);
   const permissionRequestedRef = useRef(false);
   const hasCenteredOnLocationsRef = useRef(false);
+  // A tap on a feature fires both the ShapeSource and MapView press handlers;
+  // this keeps the map-level handler from immediately clearing the selection.
+  const suppressMapPressUntilRef = useRef(0);
 
 
   // Safe location selection handler with batched state updates
@@ -458,27 +515,6 @@ export default function RegionMapScreen() {
   }, [validLocations]);
 
 
-  // Update emoji visibility based on zoom
-  const updateEmojiVisibility = useCallback((currentZoom: number) => {
-    // Convert zoom to latitudeDelta for threshold comparison
-    const latitudeDelta = 360 / Math.pow(2, currentZoom);
-    const next = latitudeDelta <= EMOJI_SHOW_MAX_LAT_DELTA;
-    setShowEmojiPins((prev) => (prev === next ? prev : next));
-  }, []);
-
-  // Handle camera change to update emoji visibility based on zoom level.
-  const handleCameraChanged = useCallback((state: any) => {
-    const props = state?.properties ?? state ?? {};
-    const incomingZoom = Number(props.zoom);
-    if (Number.isFinite(incomingZoom)) {
-      updateEmojiVisibility(incomingZoom);
-    }
-  }, [updateEmojiVisibility]);
-
-  useEffect(() => {
-    setShowEmojiPins(calculatedRegion.latitudeDelta <= EMOJI_SHOW_MAX_LAT_DELTA);
-  }, [calculatedRegion]);
-
   useEffect(() => {
     if (!selectedLocation) return;
     const stillVisible = validLocations.some((loc) => String(loc.id) === String(selectedLocation.id));
@@ -510,42 +546,70 @@ export default function RegionMapScreen() {
   }, [validLocations]);
 
 
-  // Render individual location pins for all filtered locations
-  const renderClusterMarkers = useCallback(() => {
-    if (!mapbox) return null;
+  // GeoJSON for the clustered ShapeSource; the map engine does the clustering
+  // and draws every marker natively, so gestures never drop or lag markers.
+  const locationShape = useMemo(
+    () =>
+      buildLocationFeatureCollection(validLocations, (location) =>
+        isFavorite(getNumericId(String(location.id)))
+      ),
+    [validLocations, isFavorite]
+  );
 
-    return validLocations.map((location) => {
-      const longitude = location.longitude as number;
-      const latitude = location.latitude as number;
-      if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return null;
+  const emojiIcons = useMemo(() => collectEmojiIcons(validLocations), [validLocations]);
 
-      const numericId = getNumericId(location.id);
-      const sportEmoji = getSportEmoji(location.sports || [], location.sport);
-      const locationIsFavorite = isFavorite(numericId);
-      const isSelected = selectedLocation ? String(selectedLocation.id) === String(location.id) : false;
+  // The selected location renders as a MarkerView tooltip, so hide its native
+  // emoji symbol to avoid drawing the tooltip twice.
+  const selectedLocationId = selectedLocation ? String(selectedLocation.id) : null;
+  const emojiPinFilter = useMemo(() => {
+    if (!selectedLocationId) return SINGLE_POINT_FILTER;
+    return ['all', SINGLE_POINT_FILTER, ['!=', ['get', 'id'], selectedLocationId]];
+  }, [selectedLocationId]);
 
-      return (
-        <MapboxLib.MarkerView
-          key={`location-${location.id}`}
-          id={`location-${location.id}`}
-          coordinate={[longitude, latitude]}
-          anchor={{ x: 0.5, y: 1 }}
-        >
-          <TouchableOpacity
-            style={styles.locationMarkerTouchTarget}
-            onPress={() => handleLocationPress(location)}
-          >
-            <MapboxLocationPin
-              sportEmoji={sportEmoji}
-              isFavorite={locationIsFavorite}
-              showEmoji={showEmojiPins}
-              isSelected={isSelected}
-            />
-          </TouchableOpacity>
-        </MapboxLib.MarkerView>
+  const favoriteBadgeFilter = useMemo(() => {
+    const base: any[] = ['all', SINGLE_POINT_FILTER, ['==', ['get', 'isFavorite'], true]];
+    if (selectedLocationId) {
+      base.push(['!=', ['get', 'id'], selectedLocationId]);
+    }
+    return base;
+  }, [selectedLocationId]);
+
+  const handleShapeSourcePress = useCallback(
+    async (event: any) => {
+      const feature = event?.features?.[0];
+      const coordinates = feature?.geometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return;
+
+      suppressMapPressUntilRef.current = Date.now() + 350;
+      const properties = feature.properties ?? {};
+
+      if (properties.cluster) {
+        let zoomLevel: number | null = null;
+        try {
+          const expansionZoom = await shapeSourceRef.current?.getClusterExpansionZoom(feature);
+          if (Number.isFinite(expansionZoom)) {
+            zoomLevel = Math.min(Number(expansionZoom) + 0.4, 17);
+          }
+        } catch {
+          // Fall through to the fixed fallback zoom below.
+        }
+        cameraRef.current?.setCamera({
+          centerCoordinate: [coordinates[0], coordinates[1]],
+          zoomLevel: zoomLevel ?? LOCATION_CLUSTERING.EMOJI_MIN_ZOOM,
+          animationDuration: CAMERA_CONFIG.DURATION,
+        });
+        return;
+      }
+
+      const location = validLocations.find(
+        (candidate) => String(candidate.id) === String(properties.id)
       );
-    });
-  }, [validLocations, isFavorite, mapbox, showEmojiPins, selectedLocation, handleLocationPress]);
+      if (location) {
+        handleLocationPress(location);
+      }
+    },
+    [validLocations, handleLocationPress]
+  );
 
 
   // Helper function to format cost with structure
@@ -946,11 +1010,11 @@ export default function RegionMapScreen() {
         rotateEnabled={false}
         pitchEnabled={false}
         onPress={() => {
+          if (Date.now() < suppressMapPressUntilRef.current) return;
           requestAnimationFrame(() => {
             setSelectedLocation(null);
           });
         }}
-        onCameraChanged={handleCameraChanged}
         ref={mapRef}
       >
         <MapboxLib.Camera
@@ -965,7 +1029,80 @@ export default function RegionMapScreen() {
           <MapboxLib.UserLocation visible={true} />
         )}
 
-        {renderClusterMarkers()}
+        <MapboxLib.Images>
+          {emojiIcons.map(({ key, emoji }) => (
+            <MapboxLib.Image key={key} name={key}>
+              <View collapsable={false} style={styles.emojiIconWrapper}>
+                <View style={styles.emojiIconTooltip}>
+                  <Text style={styles.emojiIconText}>{emoji}</Text>
+                </View>
+                <View style={styles.emojiIconPointer} />
+              </View>
+            </MapboxLib.Image>
+          ))}
+          <MapboxLib.Image name={FAVORITE_ICON_KEY}>
+            <View collapsable={false} style={styles.favoriteIconWrapper}>
+              <Text style={styles.favoriteIconText}>♥</Text>
+            </View>
+          </MapboxLib.Image>
+        </MapboxLib.Images>
+
+        <MapboxLib.ShapeSource
+          id="region-locations"
+          ref={shapeSourceRef}
+          shape={locationShape}
+          cluster
+          clusterRadius={LOCATION_CLUSTERING.RADIUS}
+          clusterMaxZoomLevel={LOCATION_CLUSTERING.MAX_ZOOM}
+          onPress={handleShapeSourcePress}
+        >
+          <MapboxLib.CircleLayer
+            id="location-cluster-circles"
+            filter={CLUSTER_FILTER as any}
+            style={CLUSTER_CIRCLE_STYLE as any}
+          />
+          <MapboxLib.SymbolLayer
+            id="location-cluster-counts"
+            filter={CLUSTER_FILTER as any}
+            style={CLUSTER_COUNT_STYLE as any}
+          />
+          <MapboxLib.CircleLayer
+            id="location-dots"
+            filter={SINGLE_POINT_FILTER as any}
+            style={LOCATION_DOT_STYLE as any}
+          />
+          <MapboxLib.SymbolLayer
+            id="location-emoji-pins"
+            filter={emojiPinFilter as any}
+            minZoomLevel={LOCATION_CLUSTERING.EMOJI_MIN_ZOOM}
+            style={EMOJI_PIN_STYLE as any}
+          />
+          <MapboxLib.SymbolLayer
+            id="location-favorite-badges"
+            filter={favoriteBadgeFilter as any}
+            minZoomLevel={LOCATION_CLUSTERING.EMOJI_MIN_ZOOM}
+            style={FAVORITE_BADGE_STYLE as any}
+          />
+        </MapboxLib.ShapeSource>
+
+        {selectedLocation && hasValidCoordinates(selectedLocation) && (
+          <MapboxLib.MarkerView
+            key={`selected-${selectedLocation.id}`}
+            id={`selected-${selectedLocation.id}`}
+            coordinate={[selectedLocation.longitude, selectedLocation.latitude]}
+            anchor={{ x: 0.5, y: 1 }}
+            allowOverlap
+          >
+            <View style={styles.locationMarkerTouchTarget} pointerEvents="none">
+              <MapboxLocationPin
+                sportEmoji={getSportEmoji(selectedLocation.sports || [], selectedLocation.sport)}
+                isFavorite={isFavorite(getNumericId(selectedLocation.id))}
+                showEmoji
+                isSelected
+              />
+            </View>
+          </MapboxLib.MarkerView>
+        )}
       </MapboxLib.MapView>
 
       {selectedLocation && (
@@ -1455,6 +1592,52 @@ const styles = StyleSheet.create({
     height: 44,
     alignItems: 'center',
     justifyContent: 'flex-end',
+  },
+  // Rendered off-screen into Mapbox style images (see <MapboxLib.Image>), then
+  // drawn by the emoji SymbolLayer; mirrors the MapboxLocationPin tooltip.
+  emojiIconWrapper: {
+    width: 28,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  emojiIconTooltip: {
+    backgroundColor: '#f7f4ec',
+    paddingHorizontal: 5,
+    paddingVertical: 3,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 19,
+  },
+  emojiIconText: {
+    fontSize: 10,
+  },
+  emojiIconPointer: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderTopWidth: 4,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#f7f4ec',
+  },
+  favoriteIconWrapper: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: MARKER_CONFIG.LOCATION_PIN.FAVORITE_BADGE_COLOR,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  favoriteIconText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: -1,
   },
   circlePin: {
     width: 12,
