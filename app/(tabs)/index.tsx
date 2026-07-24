@@ -1,5 +1,4 @@
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
-import { MapboxClusterMarker } from '@/components/MapboxClusterMarker';
 import { SuggestionForm } from '@/components/SuggestionForm';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { CLUSTERING_CONFIG, DEFAULT_MAP_STYLE } from '@/lib/mapboxConfig';
@@ -52,8 +51,11 @@ const PIN_CONCEPT = require('@/assets/images/pin_grijs_60.png');
 const PIN_BASE_SIZE = 48;
 const PIN_MIN_SIZE = 36;
 const PIN_MAX_SIZE = 110;
-const HOME_CLUSTER_UPDATE_THROTTLE_MS = 100;
 const HOME_FIT_BOUNDS_PADDING: [number, number, number, number] = [130, 40, 220, 40]; // [top, right, bottom, left]
+
+// Clusters are computed over the whole world, not the viewport, so panning
+// never changes which markers exist — only crossing an integer zoom level does.
+const WORLD_BBOX: [number, number, number, number] = [-180, -85, 180, 85];
 
 // Logo for branding
 const SPORTINKAART_LOGO = require('@/assets/images/icon.png');
@@ -97,6 +99,68 @@ function getPinSize(zoomLevel: number): number {
   return clamp(PIN_BASE_SIZE * scale, PIN_MIN_SIZE, PIN_MAX_SIZE);
 }
 
+// Single regions and clusters of regions share this pin, so a number on the
+// map always means the same thing: how many sport locations live under it.
+function RegionPinMarker({
+  pinSize,
+  isConcept,
+  count,
+}: {
+  pinSize: number;
+  isConcept: boolean;
+  count?: number;
+}) {
+  const badge = (() => {
+    if (count === undefined) return null;
+    const digitCount = String(count).length;
+    // Keep badge proportional to pin size and scale text down for longer values.
+    const badgeSize = clamp(
+      Math.round(pinSize * (0.52 + Math.max(0, digitCount - 1) * 0.08)),
+      11,
+      Math.round(pinSize * 0.88)
+    );
+    const fontSize = clamp(
+      Math.round(pinSize * (digitCount >= 4 ? 0.24 : digitCount === 3 ? 0.28 : 0.34)),
+      11,
+      18
+    );
+    return (
+      <View
+        style={[
+          styles.pinCountBadge,
+          {
+            width: badgeSize,
+            height: badgeSize,
+            borderRadius: badgeSize / 2,
+            // Position at top-right, attached to the pin edge
+            top: -badgeSize / 2,
+            right: -badgeSize / 2,
+          },
+        ]}
+      >
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.55}
+          style={[styles.pinCountText, { fontSize }]}
+        >
+          {count}
+        </Text>
+      </View>
+    );
+  })();
+
+  return (
+    <View collapsable={false} style={[styles.pinWrapper, { width: pinSize, height: pinSize }]}>
+      <Image
+        source={isConcept ? PIN_CONCEPT : PIN_ACTIVE}
+        style={[styles.pinImage, { width: pinSize, height: pinSize }]}
+      />
+      {badge}
+    </View>
+  );
+}
+
 export default function HomeScreen() {
   const { t } = useLanguage();
   const insets = useSafeAreaInsets();
@@ -106,38 +170,13 @@ export default function HomeScreen() {
   const [showSuggestionForm, setShowSuggestionForm] = useState(false);
   const [regionLocationCounts, setRegionLocationCounts] = useState<Record<string, number>>({});
   const [currentZoom, setCurrentZoom] = useState<number>(getZoomFromDelta(DEFAULT_MAP_REGION.latitudeDelta));
-  const [clusterData, setClusterData] = useState<any[]>([]);
-  const superclusterRef = useRef<Supercluster | null>(null);
+  const [clusterZoom, setClusterZoom] = useState<number>(() =>
+    Math.floor(getZoomFromDelta(DEFAULT_MAP_REGION.latitudeDelta))
+  );
   const mapRef = useRef<any>(null);
   const cameraRef = useRef<any>(null);
   const zoomRef = useRef<number>(getZoomFromDelta(DEFAULT_MAP_REGION.latitudeDelta));
   const hasCenteredOnRegionsRef = useRef(false);
-  const lastClusterUpdateTsRef = useRef(0);
-  const lastClusterSignatureRef = useRef('');
-
-  const regionToBbox = useCallback((region: MapRegion): [number, number, number, number] => {
-    return [
-      region.longitude - region.longitudeDelta / 2,
-      region.latitude - region.latitudeDelta / 2,
-      region.longitude + region.longitudeDelta / 2,
-      region.latitude + region.latitudeDelta / 2,
-    ];
-  }, []);
-
-  const boundsToBbox = useCallback((bounds: unknown): [number, number, number, number] | null => {
-    if (!Array.isArray(bounds) || bounds.length < 2) return null;
-    const a = bounds[0] as unknown;
-    const b = bounds[1] as unknown;
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length < 2 || b.length < 2) return null;
-
-    const lng1 = Number(a[0]);
-    const lat1 = Number(a[1]);
-    const lng2 = Number(b[0]);
-    const lat2 = Number(b[1]);
-
-    if (![lng1, lat1, lng2, lat2].every(Number.isFinite)) return null;
-    return [Math.min(lng1, lng2), Math.min(lat1, lat2), Math.max(lng1, lng2), Math.max(lat1, lat2)];
-  }, []);
 
   // Fetch regions from Supabase (memoized)
   const fetchRegions = useCallback(async () => {
@@ -247,79 +286,21 @@ export default function HomeScreen() {
   }, [mapRegions]);
 
   const handleCameraChanged = useCallback((state: MapCameraEvent) => {
-    const props = (state?.properties ?? {}) as { zoom?: number; bounds?: unknown };
-    const incomingZoom = Number(props.zoom);
-    const nextZoom = Number.isFinite(incomingZoom) ? incomingZoom : zoomRef.current;
+    const incomingZoom = Number(state?.properties?.zoom);
+    if (!Number.isFinite(incomingZoom)) return;
+
+    zoomRef.current = incomingZoom;
+    setCurrentZoom((prev) => {
+      const diff = Math.abs(prev - incomingZoom);
+      return diff > 0.12 ? incomingZoom : prev;
+    });
+
     const zoomFloor = Math.max(
       CLUSTERING_CONFIG.MIN_ZOOM,
-      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, Math.floor(nextZoom))
+      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, Math.floor(incomingZoom))
     );
-
-    if (Number.isFinite(incomingZoom)) {
-      zoomRef.current = incomingZoom;
-      setCurrentZoom((prev) => {
-        const diff = Math.abs(prev - incomingZoom);
-        return diff > 0.12 ? incomingZoom : prev;
-      });
-    }
-
-    if (!superclusterRef.current) return;
-
-    const stateBbox = boundsToBbox(props.bounds);
-    const bbox = stateBbox ?? regionToBbox(computedMapRegion);
-    const signature = `${zoomFloor}|${bbox.map((value) => value.toFixed(5)).join(',')}`;
-    const now = Date.now();
-
-    if (signature === lastClusterSignatureRef.current) return;
-    if (now - lastClusterUpdateTsRef.current < HOME_CLUSTER_UPDATE_THROTTLE_MS) return;
-
-    lastClusterSignatureRef.current = signature;
-    lastClusterUpdateTsRef.current = now;
-
-    const clusters = superclusterRef.current.getClusters(bbox, zoomFloor).map((feature: any) => {
-      if (!feature?.properties?.cluster) return feature;
-      const exactPinCount = Number(feature?.properties?.point_count) || 0;
-      return {
-        ...feature,
-        properties: {
-          ...feature.properties,
-          exact_pin_count: exactPinCount,
-        },
-      };
-    });
-    setClusterData(clusters);
-  }, [boundsToBbox, computedMapRegion, regionToBbox]);
-
-  const handleMapIdle = useCallback((state: MapCameraEvent) => {
-    const props = (state?.properties ?? {}) as { zoom?: number; bounds?: unknown };
-    const incomingZoom = Number(props.zoom);
-    const nextZoom = Number.isFinite(incomingZoom) ? incomingZoom : zoomRef.current;
-    const zoomFloor = Math.max(
-      CLUSTERING_CONFIG.MIN_ZOOM,
-      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, Math.floor(nextZoom))
-    );
-
-    if (!superclusterRef.current) return;
-    const stateBbox = boundsToBbox(props.bounds);
-    const bbox = stateBbox ?? regionToBbox(computedMapRegion);
-    const signature = `${zoomFloor}|${bbox.map((value) => value.toFixed(5)).join(',')}`;
-
-    lastClusterSignatureRef.current = signature;
-    lastClusterUpdateTsRef.current = Date.now();
-
-    const clusters = superclusterRef.current.getClusters(bbox, zoomFloor).map((feature: any) => {
-      if (!feature?.properties?.cluster) return feature;
-      const exactPinCount = Number(feature?.properties?.point_count) || 0;
-      return {
-        ...feature,
-        properties: {
-          ...feature.properties,
-          exact_pin_count: exactPinCount,
-        },
-      };
-    });
-    setClusterData(clusters);
-  }, [boundsToBbox, computedMapRegion, regionToBbox]);
+    setClusterZoom((prev) => (prev === zoomFloor ? prev : zoomFloor));
+  }, []);
 
   const pinSize = useMemo(() => getPinSize(currentZoom), [currentZoom]);
   const defaultZoomLevel = useMemo(
@@ -327,12 +308,8 @@ export default function HomeScreen() {
     [computedMapRegion.latitudeDelta]
   );
 
-  useEffect(() => {
-    if (mapRegions.length === 0) {
-      superclusterRef.current = null;
-      setClusterData([]);
-      return;
-    }
+  const clusterIndex = useMemo(() => {
+    if (mapRegions.length === 0) return null;
 
     const cluster = new Supercluster({
       radius: CLUSTERING_CONFIG.RADIUS,
@@ -340,10 +317,14 @@ export default function HomeScreen() {
       minZoom: CLUSTERING_CONFIG.MIN_ZOOM,
       map: (properties: any) => ({
         locationCount: Number(properties?.locationCount) || 0,
+        activeRegionCount: properties?.is_active && !properties?.is_concept ? 1 : 0,
       }),
       reduce: (accumulated: any, properties: any) => {
         accumulated.locationCount =
           (Number(accumulated.locationCount) || 0) + (Number(properties?.locationCount) || 0);
+        accumulated.activeRegionCount =
+          (Number(accumulated.activeRegionCount) || 0) +
+          (Number(properties?.activeRegionCount) || 0);
       },
     });
 
@@ -361,26 +342,8 @@ export default function HomeScreen() {
     }));
 
     cluster.load(points);
-    superclusterRef.current = cluster;
-
-    const bbox = regionToBbox(computedMapRegion);
-    const clusters = cluster.getClusters(bbox, Math.floor(defaultZoomLevel)).map((feature: any) => {
-      if (!feature?.properties?.cluster) return feature;
-      const exactPinCount = Number(feature?.properties?.point_count) || 0;
-      return {
-        ...feature,
-        properties: {
-          ...feature.properties,
-          exact_pin_count: exactPinCount,
-        },
-      };
-    });
-    setClusterData(clusters);
-    zoomRef.current = defaultZoomLevel;
-    lastClusterSignatureRef.current = '';
-    lastClusterUpdateTsRef.current = 0;
-    hasCenteredOnRegionsRef.current = false;
-  }, [mapRegions, computedMapRegion, defaultZoomLevel, regionToBbox, regionLocationCounts]);
+    return cluster;
+  }, [mapRegions, regionLocationCounts]);
 
   useEffect(() => {
     if (hasCenteredOnRegionsRef.current) return;
@@ -401,32 +364,24 @@ export default function HomeScreen() {
   }, [mapRegions]);
 
   const handleClusterPress = useCallback((clusterId: number, coordinate: [number, number]) => {
-    const clusterIndex = superclusterRef.current;
     if (!clusterIndex || !cameraRef.current) return;
 
     const expansionZoom = clusterIndex.getClusterExpansionZoom(clusterId);
     cameraRef.current.setCamera({
       centerCoordinate: coordinate,
-      zoomLevel: expansionZoom,
+      zoomLevel: expansionZoom + 0.4,
       animationDuration: 700,
     });
-  }, []);
+  }, [clusterIndex]);
 
   const markerData = useMemo(() => {
-    if (clusterData.length > 0) return clusterData;
-    return mapRegions.map((region) => ({
-      type: 'Feature',
-      properties: {
-        ...region,
-        id: region.id,
-        cluster: false,
-      },
-      geometry: {
-        type: 'Point',
-        coordinates: [region.longitude, region.latitude],
-      },
-    }));
-  }, [clusterData, mapRegions]);
+    if (!clusterIndex) return [];
+    const zoom = Math.max(
+      CLUSTERING_CONFIG.MIN_ZOOM,
+      Math.min(CLUSTERING_CONFIG.MAX_ZOOM, clusterZoom)
+    );
+    return clusterIndex.getClusters(WORLD_BBOX, zoom);
+  }, [clusterIndex, clusterZoom]);
 
   const fetchRegionCounts = useCallback(async () => {
     if (regions.length === 0) {
@@ -472,7 +427,6 @@ export default function HomeScreen() {
             style={styles.mapPreview}
             styleURL={DEFAULT_MAP_STYLE}
             onCameraChanged={handleCameraChanged}
-            onMapIdle={handleMapIdle}
             pitchEnabled={false}
             rotateEnabled={false}
             scaleBarEnabled={true}
@@ -493,19 +447,18 @@ export default function HomeScreen() {
               const isCluster = Boolean(item?.properties?.cluster);
               if (isCluster) {
                 const clusterId = item?.properties?.cluster_id ?? item?.id;
-                const pointCount =
-                  item?.properties?.exact_pin_count ??
-                  item?.properties?.point_count ??
-                  0;
+                const locationCount = Number(item?.properties?.locationCount) || 0;
+                const hasActiveRegion = (Number(item?.properties?.activeRegionCount) || 0) > 0;
+                const clusterPinSize = clamp(Math.round(pinSize * 1.15), PIN_MIN_SIZE, PIN_MAX_SIZE);
                 return (
                   <MapboxLib.MarkerView
                     key={`cluster-${clusterId}`}
                     id={`cluster-${clusterId}`}
                     coordinate={[longitude, latitude]}
-                    anchor={{ x: 0.5, y: 0.5 }}
+                    anchor={{ x: 0.5, y: 1 }}
                   >
                     <TouchableOpacity
-                      style={styles.clusterTouchTarget}
+                      style={[styles.pinTouchTarget, { width: clusterPinSize, height: clusterPinSize }]}
                       activeOpacity={0.9}
                       onPress={() => {
                         if (typeof clusterId === 'number') {
@@ -513,7 +466,11 @@ export default function HomeScreen() {
                         }
                       }}
                     >
-                      <MapboxClusterMarker count={pointCount} size="small" />
+                      <RegionPinMarker
+                        pinSize={clusterPinSize}
+                        isConcept={!hasActiveRegion}
+                        count={locationCount > 0 ? locationCount : undefined}
+                      />
                     </TouchableOpacity>
                   </MapboxLib.MarkerView>
                 );
@@ -537,51 +494,11 @@ export default function HomeScreen() {
                       }
                     }}
                   >
-                    <View collapsable={false} style={[styles.pinWrapper, { width: pinSize, height: pinSize }]}>
-                      <Image
-                        source={isConcept ? PIN_CONCEPT : PIN_ACTIVE}
-                        style={[styles.pinImage, { width: pinSize, height: pinSize }]}
-                      />
-                      {regionLocationCounts[region.id] !== undefined && (() => {
-                        const count = regionLocationCounts[region.id];
-                        const digitCount = String(count).length;
-                        // Keep badge proportional to pin size and scale text down for longer values.
-                        const badgeSize = clamp(
-                          Math.round(pinSize * (0.52 + Math.max(0, digitCount - 1) * 0.08)),
-                          11,
-                          Math.round(pinSize * 0.88)
-                        );
-                        const fontSize = clamp(
-                          Math.round(
-                            pinSize * (digitCount >= 4 ? 0.24 : digitCount === 3 ? 0.28 : 0.34)
-                          ),
-                          11,
-                          18
-                        );
-                        return (
-                          <View style={[
-                            styles.pinCountBadge,
-                            {
-                              width: badgeSize,
-                              height: badgeSize,
-                              borderRadius: badgeSize / 2,
-                              // Position at top-right, attached to the pin edge
-                              top: -badgeSize / 2,
-                              right: -badgeSize / 2,
-                            }
-                          ]}>
-                            <Text
-                              numberOfLines={1}
-                              adjustsFontSizeToFit
-                              minimumFontScale={0.55}
-                              style={[styles.pinCountText, { fontSize }]}
-                            >
-                              {count}
-                            </Text>
-                          </View>
-                        );
-                      })()}
-                    </View>
+                    <RegionPinMarker
+                      pinSize={pinSize}
+                      isConcept={isConcept}
+                      count={regionLocationCounts[region.id]}
+                    />
                   </TouchableOpacity>
                 </MapboxLib.MarkerView>
               );
@@ -818,12 +735,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pinTouchTarget: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  clusterTouchTarget: {
-    width: 64,
-    height: 64,
     alignItems: 'center',
     justifyContent: 'center',
   },
