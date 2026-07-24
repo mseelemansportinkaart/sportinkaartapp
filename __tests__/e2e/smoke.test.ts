@@ -49,6 +49,24 @@ async function closeSuggestionForm() {
   await element(by.id('form-cancel')).tap();
 }
 
+/**
+ * Waits for the home screen to be up and interactive.
+ *
+ * Asserts `toExist` on the container and `toBeVisible` on a child: Detox on iOS
+ * measures an element's own unobscured area, so a root container fully covered
+ * by its children counts as zero percent visible and never satisfies
+ * `toBeVisible`. Android's check uses getGlobalVisibleRect and does not care —
+ * hence assertions that passed there and hung here.
+ */
+async function waitForHomeScreen() {
+  await waitFor(element(by.id('home-screen')))
+    .toExist()
+    .withTimeout(LAUNCH_TIMEOUT);
+  await waitFor(element(by.id('contact-button')))
+    .toBeVisible()
+    .withTimeout(LAUNCH_TIMEOUT);
+}
+
 describe('Smoke', () => {
   beforeAll(async () => {
     await device.launchApp({ delete: true });
@@ -64,15 +82,11 @@ describe('Smoke', () => {
 
   describe('Home screen', () => {
     it('renders the home screen', async () => {
-      await waitFor(element(by.id('home-screen')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
     });
 
     it('shows the favorites, contact and language controls', async () => {
-      await waitFor(element(by.id('home-screen')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await expect(element(by.id('favorites-button'))).toBeVisible();
       await expect(element(by.id('contact-button'))).toBeVisible();
@@ -82,9 +96,7 @@ describe('Smoke', () => {
 
   describe('Language switching', () => {
     it('switches to English and back to Dutch', async () => {
-      await waitFor(element(by.id('language-switcher')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await element(by.id('language-switcher')).tap();
       await waitFor(element(by.id('language-modal')))
@@ -111,9 +123,7 @@ describe('Smoke', () => {
 
   describe('Suggestion form', () => {
     it('opens from the contact button and offers the three form types', async () => {
-      await waitFor(element(by.id('contact-button')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await openSuggestionForm();
 
@@ -123,9 +133,7 @@ describe('Smoke', () => {
     });
 
     it('closes again when cancel is tapped', async () => {
-      await waitFor(element(by.id('contact-button')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await openSuggestionForm();
       await closeSuggestionForm();
@@ -133,15 +141,13 @@ describe('Smoke', () => {
       await waitFor(element(by.id('form-type-add')))
         .not.toBeVisible()
         .withTimeout(TRANSITION_TIMEOUT);
-      await expect(element(by.id('home-screen'))).toBeVisible();
+      await expect(element(by.id('contact-button'))).toBeVisible();
     });
   });
 
   describe('Favorites', () => {
     it('opens the favorites screen and shows the empty state on a fresh install', async () => {
-      await waitFor(element(by.id('favorites-button')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await element(by.id('favorites-button')).tap();
 
@@ -152,9 +158,7 @@ describe('Smoke', () => {
     });
 
     it('returns to the home screen from the empty state', async () => {
-      await waitFor(element(by.id('favorites-button')))
-        .toBeVisible()
-        .withTimeout(LAUNCH_TIMEOUT);
+      await waitForHomeScreen();
 
       await element(by.id('favorites-button')).tap();
       await waitFor(element(by.id('explore-button')))
@@ -163,7 +167,7 @@ describe('Smoke', () => {
 
       await element(by.id('explore-button')).tap();
 
-      await waitFor(element(by.id('home-screen')))
+      await waitFor(element(by.id('contact-button')))
         .toBeVisible()
         .withTimeout(TRANSITION_TIMEOUT);
     });
