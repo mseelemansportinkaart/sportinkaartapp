@@ -1,8 +1,9 @@
 import React from 'react';
-import { waitFor } from '@testing-library/react-native';
+import { fireEvent, waitFor } from '@testing-library/react-native';
 import { renderWithProviders } from '../../setup/test-utils';
 import RegionMapScreen from '@/app/region/[slug]/map';
 import { supabase } from '@/lib/supabase';
+import { getEmojiIconKey } from '@/utils/locationFeatures';
 
 jest.mock('expo-router', () => ({
   router: { back: jest.fn(), push: jest.fn() },
@@ -126,12 +127,66 @@ describe('RegionMapScreen integration', () => {
     });
   });
 
-  it('renders map and markers for region locations', async () => {
+  it('feeds region locations into the clustered shape source', async () => {
     const { getByTestId, getByText } = renderWithProviders(<RegionMapScreen />);
 
     await waitFor(() => getByTestId('region-map'));
 
     expect(getByText('Sportlocaties Almere')).toBeTruthy();
-    expect(getByTestId('marker-location-loc-1')).toBeTruthy();
+
+    const shapeSource = await waitFor(() => getByTestId('shape-source-region-locations'));
+    expect(shapeSource.props.cluster).toBe(true);
+    await waitFor(() => {
+      expect(shapeSource.props.shape.features).toHaveLength(1);
+    });
+
+    const feature = shapeSource.props.shape.features[0];
+    expect(feature.properties.id).toBe('loc-1');
+    expect(feature.geometry.coordinates).toEqual([4.9, 52.37]);
+
+    // The football emoji is registered as a style image for the symbol layer.
+    expect(getByTestId(`map-image-${getEmojiIconKey('⚽️')}`)).toBeTruthy();
+  });
+
+  it('selects a location when its feature is pressed', async () => {
+    const { getByTestId, getByText } = renderWithProviders(<RegionMapScreen />);
+
+    const shapeSource = await waitFor(() => getByTestId('shape-source-region-locations'));
+    await waitFor(() => {
+      expect(shapeSource.props.shape.features).toHaveLength(1);
+    });
+
+    fireEvent(shapeSource, 'press', {
+      features: shapeSource.props.shape.features,
+    });
+
+    await waitFor(() => expect(getByText('Club One')).toBeTruthy());
+    expect(getByTestId('marker-selected-loc-1')).toBeTruthy();
+  });
+
+  it('zooms in when a cluster is pressed', async () => {
+    const mapboxMock = jest.requireMock('@rnmapbox/maps');
+    const { getByTestId } = renderWithProviders(<RegionMapScreen />);
+
+    const shapeSource = await waitFor(() => getByTestId('shape-source-region-locations'));
+
+    fireEvent(shapeSource, 'press', {
+      features: [
+        {
+          type: 'Feature',
+          properties: { cluster: true, cluster_id: 7, point_count: 12 },
+          geometry: { type: 'Point', coordinates: [5.2, 52.35] },
+        },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(mapboxMock.__mockSetCamera).toHaveBeenCalledWith(
+        expect.objectContaining({
+          centerCoordinate: [5.2, 52.35],
+          zoomLevel: 14.4,
+        })
+      );
+    });
   });
 });

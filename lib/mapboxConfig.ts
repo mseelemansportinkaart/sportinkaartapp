@@ -59,6 +59,21 @@ export const CLUSTERING_CONFIG = {
   },
 };
 
+// Native (ShapeSource) clustering for the per-region location maps. Rendering
+// happens on the map thread, so these only tune grouping and hand-off zooms.
+export const LOCATION_CLUSTERING = {
+  // Cluster radius in pixels
+  RADIUS: 45,
+
+  // Points stay clustered up to and including this zoom; above it every
+  // location renders individually.
+  MAX_ZOOM: 12,
+
+  // Zoom at which the emoji tooltips appear above the dots. Matches the old
+  // EMOJI_THRESHOLD latitude delta of 0.05 (log2(360 / 0.05) ≈ 12.8).
+  EMOJI_MIN_ZOOM: 13,
+};
+
 // Marker Configuration
 export const MARKER_CONFIG = {
   // Marker image paths

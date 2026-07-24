@@ -287,15 +287,60 @@ jest.mock('@rnmapbox/maps', () => {
       ...props,
     });
 
+  const mockGetClusterExpansionZoom = jest.fn().mockResolvedValue(14);
+
+  const MockShapeSource = React.forwardRef(({ children, ...props }: any, ref: any) => {
+    React.useImperativeHandle(ref, () => ({
+      getClusterExpansionZoom: mockGetClusterExpansionZoom,
+    }));
+
+    return React.createElement(
+      View,
+      {
+        testID: props.testID || `shape-source-${props.id || 'default'}`,
+        ...props,
+      },
+      children
+    );
+  });
+
+  MockShapeSource.displayName = 'MapboxShapeSource';
+
+  const createMockLayer = (prefix: string) => {
+    const MockLayer = (props: any) =>
+      React.createElement(View, {
+        testID: props.testID || `${prefix}-${props.id || 'default'}`,
+        ...props,
+      });
+    MockLayer.displayName = `Mapbox${prefix}`;
+    return MockLayer;
+  };
+
+  const MockImages = ({ children, ...props }: any) =>
+    React.createElement(View, { testID: props.testID || 'mapbox-images', ...props }, children);
+
+  const MockImage = ({ children, ...props }: any) =>
+    React.createElement(
+      View,
+      { testID: props.testID || `map-image-${props.name || 'default'}`, ...props },
+      children
+    );
+
   const mockModule = {
     MapView: MockMapView,
     Camera: MockCamera,
     PointAnnotation: MockPointAnnotation,
     MarkerView: MockMarkerView,
     UserLocation: MockUserLocation,
+    ShapeSource: MockShapeSource,
+    CircleLayer: createMockLayer('circle-layer'),
+    SymbolLayer: createMockLayer('symbol-layer'),
+    Images: MockImages,
+    Image: MockImage,
     setAccessToken: jest.fn().mockResolvedValue(null),
     __mockSetCamera: mockMapboxSetCamera,
     __mockFitBounds: mockMapboxFitBounds,
+    __mockGetClusterExpansionZoom: mockGetClusterExpansionZoom,
     StyleURL: {
       Street: 'mapbox://styles/mapbox/streets-v11',
     },
